@@ -4,7 +4,7 @@ export default function LayerSwitcher() {
   const { activeBaseLayerId, setActiveBaseLayer } = useMapStore()
 
   return (
-    <div className="absolute bottom-10 right-14 z-10 bg-surface/90 backdrop-blur-sm border border-white/10 rounded-lg p-3 shadow-xl min-w-[160px]">
+    <div className="absolute bottom-10 right-14 z-10 bg-surface/90 backdrop-blur-sm border border-white/10 rounded-lg p-3 shadow-xl min-w-[170px]">
       <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Base Layer</p>
       <ul className="space-y-1">
         {BASE_LAYERS.map((layer) => (
@@ -23,6 +23,7 @@ export default function LayerSwitcher() {
           </li>
         ))}
       </ul>
+      <p className="text-xs text-slate-500 mt-3 px-1">Cadastral overlay visible at zoom ≥ 14</p>
     </div>
   )
 }

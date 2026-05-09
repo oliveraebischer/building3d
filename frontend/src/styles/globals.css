@@ -19,12 +19,116 @@
   }
 }
 
-/* MapLibre overrides */
+/* Search result bold highlights */
+[data-searchbar] b {
+  color: #e94560;
+  font-weight: 600;
+}
+
+/* MapLibre base overrides */
 .maplibregl-ctrl-attrib {
   background: rgba(26, 26, 46, 0.8) !important;
   color: #94a3b8 !important;
 }
-
 .maplibregl-ctrl-attrib a {
   color: #94a3b8 !important;
+}
+
+/* ── Dark popup theme ────────────────────────────────────────────────────── */
+.b3d-popup .maplibregl-popup-content {
+  background: #16213e;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 10px;
+  padding: 0;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+  overflow: hidden;
+  min-width: 260px;
+}
+.b3d-popup .maplibregl-popup-tip {
+  border-top-color: #16213e;
+}
+.b3d-popup .maplibregl-popup-close-button {
+  color: #94a3b8;
+  font-size: 18px;
+  padding: 4px 8px;
+  line-height: 1;
+}
+.b3d-popup .maplibregl-popup-close-button:hover {
+  color: #e2e8f0;
+  background: transparent;
+}
+
+/* Popup content layout */
+.popup-body {
+  max-height: 480px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.15) transparent;
+}
+.popup-section {
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.popup-section:last-child {
+  border-bottom: none;
+}
+.popup-section-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #e94560;
+  margin-bottom: 8px;
+}
+.popup-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.popup-table tr + tr td {
+  padding-top: 4px;
+}
+.popup-label {
+  font-size: 11px;
+  color: #64748b;
+  white-space: nowrap;
+  padding-right: 10px;
+  vertical-align: top;
+}
+.popup-value {
+  font-size: 12px;
+  color: #e2e8f0;
+  word-break: break-word;
+}
+.popup-mono {
+  font-family: monospace;
+  font-size: 11px;
+  color: #94a3b8;
+}
+.popup-empty {
+  font-size: 12px;
+  color: #64748b;
+  font-style: italic;
+}
+
+/* Loading state */
+.popup-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #94a3b8;
+  padding: 14px;
+}
+.popup-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255,255,255,0.15);
+  border-top-color: #e94560;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
