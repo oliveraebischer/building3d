@@ -4,15 +4,7 @@ export default {
   theme: {
     extend: {
       colors: {
-        surface: {
-          DEFAULT: '#1a1a2e',
-          raised: '#16213e',
-          overlay: '#0f3460',
-        },
-        accent: {
-          DEFAULT: '#e94560',
-          muted: '#c73652',
-        },
+        accent: '#00E5FF',
       },
     },
   },

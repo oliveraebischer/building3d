@@ -1,6 +1,7 @@
 import type maplibregl from 'maplibre-gl'
 
 const IDENTIFY = 'https://api3.geo.admin.ch/rest/services/all/MapServer/identify'
+const FIND     = 'https://api3.geo.admin.ch/rest/services/all/MapServer/find'
 
 // ─── GWR code lookup tables ────────────────────────────────────────────────
 
@@ -68,12 +69,38 @@ export type GwrFeature = {
   heatingSystem: string
   energySourceHeating: string
   energySourceHotWater: string
+  geometry: GeoJSON.Point | null
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
 function esriRingsToGeoJSON(rings: [number, number][][]): GeoJSON.Polygon {
   return { type: 'Polygon', coordinates: rings }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function attributesToGwrFeature(r: Record<string, any>): GwrFeature {
+  const a = r.attributes ?? r
+  const g = r.geometry
+  return {
+    egid: String(a.egid ?? '—'),
+    address: a.strname_deinr ?? '—',
+    municipality: a.ggdename ?? '—',
+    canton: a.gdekt ?? '—',
+    status: look(GSTAT, a.gstat),
+    category: look(GKAT, a.gkat),
+    constructionYear: a.gbauj ?? null,
+    constructionPeriod: look(GBAUP, a.gbaup),
+    floors: a.gastw ?? null,
+    apartments: a.ganzwhg ?? null,
+    footprintM2: a.garea ?? null,
+    heatingSystem: look(GWAERZ, a.gwaerzh1),
+    energySourceHeating: look(GENH, a.genh1),
+    energySourceHotWater: look(GENH, a.genw1),
+    geometry: g?.x != null && g?.y != null
+      ? { type: 'Point', coordinates: [g.x, g.y] }
+      : null,
+  }
 }
 
 function identifyParams(
@@ -122,33 +149,20 @@ export async function identifyParcel(
   }
 }
 
-export async function identifyGWR(
-  lng: number,
-  lat: number,
-  bounds: maplibregl.LngLatBounds,
-  canvas: { width: number; height: number },
-): Promise<GwrFeature | null> {
-  const params = identifyParams('ch.bfs.gebaeude_wohnungs_register', lng, lat, bounds, canvas, false)
-  const res = await fetch(`${IDENTIFY}?${params}`)
-  if (!res.ok) return null
+/** Returns all GWR buildings whose parcel EGRID matches the given parcel EGRID. */
+export async function findBuildingsByEGRID(egrid: string): Promise<GwrFeature[]> {
+  if (!egrid || egrid === '—') return []
+  const params = new URLSearchParams({
+    layer: 'ch.bfs.gebaeude_wohnungs_register',
+    searchText: egrid,
+    searchField: 'egrid',
+    returnGeometry: 'true',
+    sr: '4326',
+    lang: 'en',
+  })
+  const res = await fetch(`${FIND}?${params}`)
+  if (!res.ok) return []
   const data = await res.json()
-  const r = data.results?.[0]
-  if (!r) return null
-  const a = r.attributes
-  return {
-    egid: a.egid ?? '—',
-    address: a.strname_deinr ?? '—',
-    municipality: a.ggdename ?? '—',
-    canton: a.gdekt ?? '—',
-    status: look(GSTAT, a.gstat),
-    category: look(GKAT, a.gkat),
-    constructionYear: a.gbauj ?? null,
-    constructionPeriod: look(GBAUP, a.gbaup),
-    floors: a.gastw ?? null,
-    apartments: a.ganzwhg ?? null,
-    footprintM2: a.garea ?? null,
-    heatingSystem: look(GWAERZ, a.gwaerzh1),
-    energySourceHeating: look(GENH, a.genh1),
-    energySourceHotWater: look(GENH, a.genw1),
-  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (data.results ?? []).map((r: any) => attributesToGwrFeature(r))
 }

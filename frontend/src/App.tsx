@@ -1,6 +1,7 @@
 import MapView from './components/MapView'
 import TopBar from './components/TopBar'
 import LayerSwitcher from './components/LayerSwitcher'
+import ParcelPanel from './components/ParcelPanel'
 
 export default function App() {
   return (
@@ -8,6 +9,7 @@ export default function App() {
       <MapView />
       <TopBar />
       <LayerSwitcher />
+      <ParcelPanel />
     </div>
   )
 }

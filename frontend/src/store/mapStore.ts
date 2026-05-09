@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import maplibregl from 'maplibre-gl'
+import type { ParcelFeature, GwrFeature } from '../api/geoAdmin'
 
 export type BaseLayer = {
   id: string
@@ -32,13 +33,44 @@ export const BASE_LAYERS: BaseLayer[] = [
 type MapState = {
   activeBaseLayerId: string
   mapInstance: maplibregl.Map | null
+  lookupParcel: ((lng: number, lat: number, showLoading?: boolean) => void) | null
+  // Parcel panel state
+  parcelLoading: boolean
+  selectedParcel: ParcelFeature | null
+  selectedGWR: GwrFeature[]
+  parcelError: boolean
   setActiveBaseLayer: (id: string) => void
   setMapInstance: (map: maplibregl.Map | null) => void
+  setLookupParcel: (fn: ((lng: number, lat: number, showLoading?: boolean) => void) | null) => void
+  clearHighlight: (() => void) | null
+  setHighlightBuilding: ((geom: GeoJSON.Geometry | null) => void) | null
+  setParcelLoading: (v: boolean) => void
+  setParcelResult: (parcel: ParcelFeature | null, gwr: GwrFeature[], error?: boolean) => void
+  clearParcel: () => void
+  setClearHighlight: (fn: () => void) => void
+  setHighlightBuildingFn: (fn: (geom: GeoJSON.Geometry | null) => void) => void
 }
 
-export const useMapStore = create<MapState>((set) => ({
+export const useMapStore = create<MapState>((set, get) => ({
   activeBaseLayerId: 'pixelkarte',
   mapInstance: null,
+  lookupParcel: null,
+  parcelLoading: false,
+  selectedParcel: null,
+  selectedGWR: [],
+  parcelError: false,
+  clearHighlight: null,
+  setHighlightBuilding: null,
   setActiveBaseLayer: (id) => set({ activeBaseLayerId: id }),
   setMapInstance: (map) => set({ mapInstance: map }),
+  setLookupParcel: (fn) => set({ lookupParcel: fn }),
+  setParcelLoading: (v) => set({ parcelLoading: v, parcelError: false }),
+  setParcelResult: (parcel, gwr, error = false) =>
+    set({ selectedParcel: parcel, selectedGWR: gwr, parcelLoading: false, parcelError: error }),
+  clearParcel: () => {
+    get().setHighlightBuilding?.(null)
+    set({ selectedParcel: null, selectedGWR: [], parcelLoading: false, parcelError: false })
+  },
+  setClearHighlight: (fn) => set({ clearHighlight: fn }),
+  setHighlightBuildingFn: (fn) => set({ setHighlightBuilding: fn }),
 }))

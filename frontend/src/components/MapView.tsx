@@ -1,8 +1,7 @@
 import { useEffect, useRef } from 'react'
 import maplibregl from 'maplibre-gl'
 import { useMapStore, BASE_LAYERS } from '../store/mapStore'
-import { identifyParcel, identifyGWR } from '../api/geoAdmin'
-import type { ParcelFeature, GwrFeature } from '../api/geoAdmin'
+import { identifyParcel, findBuildingsByEGRID } from '../api/geoAdmin'
 
 const SWITZERLAND_CENTER: [number, number] = [8.2275, 46.8182]
 const INITIAL_ZOOM = 8
@@ -16,58 +15,12 @@ const CADASTRAL_WMS = [
   '&BBOX={bbox-epsg-3857}&STYLES=',
 ].join('')
 
-// ─── Popup HTML builders ───────────────────────────────────────────────────
-
-function row(label: string, value: string | number | null) {
-  if (value == null || value === '—') return ''
-  return `<tr><td class="popup-label">${label}</td><td class="popup-value">${value}</td></tr>`
-}
-
-function buildPopupHTML(parcel: ParcelFeature | null, gwr: GwrFeature | null): string {
-  if (!parcel) return '<div class="popup-body"><p class="popup-empty">No parcel found at this location.</p></div>'
-
-  const gwrSection = gwr
-    ? `<div class="popup-section">
-        <div class="popup-section-title">Building (GWR)</div>
-        <table class="popup-table">
-          ${row('Address', gwr.address)}
-          ${row('Municipality', `${gwr.municipality} (${gwr.canton})`)}
-          ${row('Status', gwr.status)}
-          ${row('Category', gwr.category)}
-          ${row('Built', gwr.constructionYear ?? gwr.constructionPeriod)}
-          ${row('Floors', gwr.floors)}
-          ${row('Apartments', gwr.apartments)}
-          ${row('Footprint', gwr.footprintM2 != null ? `${gwr.footprintM2} m²` : null)}
-          ${row('Heating', gwr.heatingSystem)}
-          ${row('Heat Energy', gwr.energySourceHeating)}
-          ${row('Hot Water', gwr.energySourceHotWater)}
-        </table>
-      </div>`
-    : '<div class="popup-section"><p class="popup-empty">No building data (GWR) at this point.</p></div>'
-
-  return `
-    <div class="popup-body">
-      <div class="popup-section">
-        <div class="popup-section-title">Parcel</div>
-        <table class="popup-table">
-          ${row('Parcel No.', parcel.parcelNumber)}
-          ${row('Canton', parcel.canton)}
-          ${row('EGRID', `<span class="popup-mono">${parcel.egrid}</span>`)}
-        </table>
-      </div>
-      ${gwrSection}
-    </div>`
-}
-
-// ─── Component ─────────────────────────────────────────────────────────────
-
 export default function MapView() {
   const mapContainer = useRef<HTMLDivElement>(null)
-  const { activeBaseLayerId, setMapInstance } = useMapStore()
   const mapRef = useRef<maplibregl.Map | null>(null)
-  const popupRef = useRef<maplibregl.Popup | null>(null)
+  const { activeBaseLayerId, setMapInstance, setLookupParcel,
+          setParcelLoading, setParcelResult, clearParcel } = useMapStore()
 
-  // Initialize map
   useEffect(() => {
     if (!mapContainer.current || mapRef.current) return
 
@@ -91,11 +44,11 @@ export default function MapView() {
       zoom: INITIAL_ZOOM,
     })
 
-    map.addControl(new maplibregl.NavigationControl(), 'bottom-right')
+    map.addControl(new maplibregl.NavigationControl(), 'top-right')
     map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left')
 
     map.on('load', () => {
-      // ── Cadastral overlay (always on, 50% opacity, zoom ≥ 14)
+      // Cadastral overlay — always on, 50% opacity, zoom ≥ 14
       map.addSource('cadastral', {
         type: 'raster',
         tiles: [CADASTRAL_WMS],
@@ -110,7 +63,7 @@ export default function MapView() {
         paint: { 'raster-opacity': 0.5 },
       })
 
-      // ── Parcel highlight (GeoJSON, rendered above cadastral)
+      // Parcel highlight source
       map.addSource('parcel-highlight', {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
@@ -119,72 +72,107 @@ export default function MapView() {
         id: 'parcel-highlight-fill',
         type: 'fill',
         source: 'parcel-highlight',
-        paint: { 'fill-color': '#e94560', 'fill-opacity': 0.25 },
+        paint: { 'fill-color': '#00E5FF', 'fill-opacity': 0.2 },
       })
       map.addLayer({
         id: 'parcel-highlight-outline',
         type: 'line',
         source: 'parcel-highlight',
-        paint: { 'line-color': '#e94560', 'line-width': 2 },
+        paint: { 'line-color': '#00E5FF', 'line-width': 2 },
+      })
+
+      // Building hover highlight source
+      map.addSource('building-highlight', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      })
+      map.addLayer({
+        id: 'building-highlight-circle',
+        type: 'circle',
+        source: 'building-highlight',
+        paint: {
+          'circle-radius': 12,
+          'circle-color': '#00E5FF',
+          'circle-opacity': 0.4,
+          'circle-stroke-width': 2,
+          'circle-stroke-color': '#00E5FF',
+          'circle-stroke-opacity': 0.9,
+        },
       })
     })
 
-    // ── Click handler
-    map.on('click', async (e) => {
-      if (map.getZoom() < CADASTRAL_MIN_ZOOM) return
+    const highlightSource = () =>
+      map.getSource('parcel-highlight') as maplibregl.GeoJSONSource | undefined
 
-      const { lng, lat } = e.lngLat
+    const buildingHighlightSource = () =>
+      map.getSource('building-highlight') as maplibregl.GeoJSONSource | undefined
+
+    // Shared lookup — called by map clicks and search selection
+    const doLookup = async (lng: number, lat: number, showLoading = false) => {
       const bounds = map.getBounds()
       const canvas = map.getCanvas()
       const size = { width: canvas.width, height: canvas.height }
 
-      // Show loading popup immediately
-      popupRef.current?.remove()
-      popupRef.current = new maplibregl.Popup({ closeButton: true, maxWidth: '320px', className: 'b3d-popup' })
-        .setLngLat([lng, lat])
-        .setHTML('<div class="popup-body popup-loading"><span class="popup-spinner"></span> Loading parcel data…</div>')
-        .addTo(map)
+      if (showLoading) setParcelLoading(true)
 
       try {
-        const [parcel, gwr] = await Promise.all([
-          identifyParcel(lng, lat, bounds, size),
-          identifyGWR(lng, lat, bounds, size),
-        ])
+        const parcel = await identifyParcel(lng, lat, bounds, size)
 
-        // Update highlight
-        const highlightSource = map.getSource('parcel-highlight') as maplibregl.GeoJSONSource | undefined
-        if (highlightSource) {
-          highlightSource.setData(
-            parcel
-              ? { type: 'Feature', geometry: parcel.geometry, properties: {} }
-              : { type: 'FeatureCollection', features: [] },
-          )
+        if (!parcel) {
+          if (!showLoading) {
+            clearParcel()
+            highlightSource()?.setData({ type: 'FeatureCollection', features: [] })
+          } else {
+            setParcelResult(null, [])
+            highlightSource()?.setData({ type: 'FeatureCollection', features: [] })
+          }
+          return
         }
 
-        popupRef.current?.setHTML(buildPopupHTML(parcel, gwr))
+        // Query all buildings on the parcel by EGRID (not by click point)
+        const buildings = await findBuildingsByEGRID(parcel.egrid)
+
+        setParcelResult(parcel, buildings)
+        highlightSource()?.setData({ type: 'Feature', geometry: parcel.geometry, properties: {} })
       } catch {
-        popupRef.current?.setHTML('<div class="popup-body"><p class="popup-empty">Error loading data.</p></div>')
+        if (showLoading) setParcelResult(null, [], true)
       }
+    }
+
+    setLookupParcel(doLookup)
+
+    map.on('click', (e) => {
+      if (map.getZoom() < CADASTRAL_MIN_ZOOM) return
+      doLookup(e.lngLat.lng, e.lngLat.lat, false)
     })
 
-    // Pointer cursor when over parcel highlight
     map.on('mouseenter', 'parcel-highlight-fill', () => { map.getCanvas().style.cursor = 'pointer' })
     map.on('mouseleave', 'parcel-highlight-fill', () => { map.getCanvas().style.cursor = '' })
 
-    // Clear highlight when popup is closed
-    map.on('closeAllPopups', () => {
-      const src = map.getSource('parcel-highlight') as maplibregl.GeoJSONSource | undefined
-      src?.setData({ type: 'FeatureCollection', features: [] })
+    // Expose highlight-clear so the panel close button can clear it
+    useMapStore.getState().setClearHighlight(() => {
+      highlightSource()?.setData({ type: 'FeatureCollection', features: [] })
+      buildingHighlightSource()?.setData({ type: 'FeatureCollection', features: [] })
+    })
+
+    // Register building hover highlight callback
+    useMapStore.getState().setHighlightBuildingFn((geom) => {
+      buildingHighlightSource()?.setData(
+        geom
+          ? { type: 'Feature', geometry: geom, properties: {} }
+          : { type: 'FeatureCollection', features: [] }
+      )
     })
 
     mapRef.current = map
     setMapInstance(map)
 
     return () => {
-      popupRef.current?.remove()
       map.remove()
       mapRef.current = null
       setMapInstance(null)
+      setLookupParcel(null)
+      clearParcel()
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -204,7 +192,6 @@ export default function MapView() {
         tileSize: 256,
         attribution: layer.attribution,
       })
-      // Insert below cadastral
       map.addLayer(
         { id: 'swisstopo-base', type: 'raster', source: 'swisstopo-base' },
         map.getLayer('cadastral') ? 'cadastral' : undefined,
