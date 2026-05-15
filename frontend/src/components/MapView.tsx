@@ -19,8 +19,11 @@ export default function MapView() {
   const mapContainer = useRef<HTMLDivElement>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
   const mapReadyRef = useRef(false)
-  const { activeBaseLayerId, dataMode, setMapInstance, setLookupParcel,
-          setParcelLoading, setParcelResult, clearParcel } = useMapStore()
+  const { activeBaseLayerId, dataMode, tileGrid, downloadedTileIds,
+          setMapInstance, setLookupParcel,
+          setParcelLoading, setParcelResult, clearParcel,
+          highlightedTileId } = useMapStore()
+  const prevHighlightedRef = useRef<string | null>(null)
 
   useEffect(() => {
     if (!mapContainer.current || mapRef.current) return
@@ -101,6 +104,82 @@ export default function MapView() {
           'circle-stroke-opacity': 0.9,
         },
       })
+
+      // Tile grid source (populated when data mode is entered)
+      map.addSource('tile-grid', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+        promoteId: 'id',
+      })
+      map.addLayer({
+        id: 'tile-grid-fill',
+        type: 'fill',
+        source: 'tile-grid',
+        layout: { visibility: 'none' },
+        paint: {
+          'fill-color': ['case', ['feature-state', 'downloaded'], '#00E5FF', 'rgba(255,255,255,0.04)'],
+          'fill-opacity': ['case',
+            ['all', ['feature-state', 'downloaded'], ['feature-state', 'highlighted']], 0.3,
+            ['feature-state', 'downloaded'], 0.15,
+            1,
+          ],
+        },
+      }, 'parcel-highlight-fill')
+      map.addLayer({
+        id: 'tile-grid-outline',
+        type: 'line',
+        source: 'tile-grid',
+        layout: { visibility: 'none' },
+        paint: {
+          'line-color': [
+            'case',
+            ['feature-state', 'downloaded'], '#00E5FF',
+            ['any', ['feature-state', 'hovered'], ['feature-state', 'highlighted']], 'rgba(255,255,255,0.55)',
+            'rgba(255,255,255,0.18)',
+          ],
+          'line-width': [
+            'case',
+            ['all', ['feature-state', 'downloaded'], ['feature-state', 'highlighted']], 2.5,
+            ['feature-state', 'downloaded'], 1.5,
+            ['any', ['feature-state', 'hovered'], ['feature-state', 'highlighted']], 1.5,
+            0.7,
+          ],
+        },
+      }, 'parcel-highlight-fill')
+
+      // Tile grid interaction
+      let hoveredTileId: string | null = null
+
+      map.on('mousemove', 'tile-grid-fill', (e) => {
+        if (!useMapStore.getState().dataMode) return
+        const newId = (e.features?.[0]?.id as string) ?? null
+        if (newId !== hoveredTileId) {
+          if (hoveredTileId) map.setFeatureState({ source: 'tile-grid', id: hoveredTileId }, { hovered: false })
+          hoveredTileId = newId
+          if (newId) map.setFeatureState({ source: 'tile-grid', id: newId }, { hovered: true })
+        }
+        const { downloadedTileIds: dl, downloadingTileIds: dling } = useMapStore.getState()
+        map.getCanvas().style.cursor = newId && !dl.has(newId) && !dling.has(newId) ? 'pointer' : ''
+        useMapStore.getState().setHighlightedTileId(newId && dl.has(newId) ? newId : null)
+      })
+
+      map.on('mouseleave', 'tile-grid-fill', () => {
+        if (hoveredTileId) map.setFeatureState({ source: 'tile-grid', id: hoveredTileId }, { hovered: false })
+        hoveredTileId = null
+        map.getCanvas().style.cursor = ''
+        useMapStore.getState().setHighlightedTileId(null)
+      })
+
+      map.on('click', 'tile-grid-fill', (e) => {
+        if (!useMapStore.getState().dataMode) return
+        const tileId = e.features?.[0]?.id as string
+        if (!tileId) return
+        const { downloadedTileIds: dl, downloadingTileIds: dling, tileGrid: grid } = useMapStore.getState()
+        if (dl.has(tileId) || dling.has(tileId)) return
+        const tile = grid.find((t) => t.id === tileId)
+        if (!tile) return
+        useMapStore.getState().triggerTileDownload(tileId, tile.gdbHref)
+      })
     })
 
     const highlightSource = () =>
@@ -144,6 +223,7 @@ export default function MapView() {
     setLookupParcel(doLookup)
 
     map.on('click', (e) => {
+      if (useMapStore.getState().dataMode) return
       if (map.getZoom() < CADASTRAL_MIN_ZOOM) return
       doLookup(e.lngLat.lng, e.lngLat.lat, false)
     })
@@ -175,11 +255,12 @@ export default function MapView() {
     setMapInstance(map)
 
     return () => {
+      clearParcel()
       map.remove()
       mapRef.current = null
+      mapReadyRef.current = false
       setMapInstance(null)
       setLookupParcel(null)
-      clearParcel()
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -223,6 +304,57 @@ export default function MapView() {
     if (mapReadyRef.current) apply()
     else map.once('load', apply)
   }, [dataMode, activeBaseLayerId])
+
+  // Populate tile-grid GeoJSON source when tile data is fetched
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapReadyRef.current || tileGrid.length === 0) return
+    const src = map.getSource('tile-grid') as maplibregl.GeoJSONSource | undefined
+    src?.setData({
+      type: 'FeatureCollection',
+      features: tileGrid.map((f) => ({
+        type: 'Feature',
+        id: f.id,
+        geometry: f.geometry,
+        properties: { id: f.id },
+      })),
+    })
+  }, [tileGrid])
+
+  // Sync downloaded feature-state on the tile-grid source
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapReadyRef.current || tileGrid.length === 0) return
+    tileGrid.forEach((t) => {
+      map.setFeatureState({ source: 'tile-grid', id: t.id }, { downloaded: downloadedTileIds.has(t.id) })
+    })
+  }, [downloadedTileIds, tileGrid])
+
+  // Sync highlightedTileId → map 'highlighted' feature-state (panel↔map bidirectional highlight)
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapReadyRef.current) return
+    if (prevHighlightedRef.current) {
+      map.setFeatureState({ source: 'tile-grid', id: prevHighlightedRef.current }, { highlighted: false })
+    }
+    if (highlightedTileId) {
+      map.setFeatureState({ source: 'tile-grid', id: highlightedTileId }, { highlighted: true })
+    }
+    prevHighlightedRef.current = highlightedTileId
+  }, [highlightedTileId])
+
+  // Show/hide tile grid layers with dataMode
+  useEffect(() => {
+    const map = mapRef.current
+    const apply = () => {
+      const vis = dataMode ? 'visible' : 'none'
+      ;(['tile-grid-fill', 'tile-grid-outline'] as const).forEach((id) => {
+        if (map?.getLayer(id)) map.setLayoutProperty(id, 'visibility', vis)
+      })
+    }
+    if (mapReadyRef.current) apply()
+    else map?.once('load', apply)
+  }, [dataMode])
 
   return <div ref={mapContainer} className="absolute inset-0" />
 }

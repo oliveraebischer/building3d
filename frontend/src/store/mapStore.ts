@@ -1,6 +1,8 @@
 import { create } from 'zustand'
 import maplibregl from 'maplibre-gl'
 import type { ParcelFeature, GwrFeature } from '../api/geoAdmin'
+import { downloadTile as apiDownloadTile } from '../api/tiles'
+import type { TileGridFeature } from '../api/tiles'
 
 export type BaseLayer = {
   id: string
@@ -44,6 +46,17 @@ type MapState = {
   setDataMode: (v: boolean) => void
   dataPanelWidth: number
   setDataPanelWidth: (w: number) => void
+  // Tile downloader
+  tileGrid: TileGridFeature[]
+  downloadedTileIds: Set<string>
+  downloadingTileIds: Set<string>
+  tileGridLoading: boolean
+  setTileGrid: (tiles: TileGridFeature[]) => void
+  setDownloadedTileIds: (ids: string[]) => void
+  addDownloadedTileId: (id: string) => void
+  removeDownloadedTileId: (id: string) => void
+  setTileGridLoading: (v: boolean) => void
+  triggerTileDownload: (id: string, url: string) => Promise<void>
   setActiveBaseLayer: (id: string) => void
   setMapInstance: (map: maplibregl.Map | null) => void
   setLookupParcel: (fn: ((lng: number, lat: number, showLoading?: boolean) => void) | null) => void
@@ -56,6 +69,9 @@ type MapState = {
   setClearHighlight: (fn: () => void) => void
   setHighlightBuildingFn: (fn: (geom: GeoJSON.Geometry | null) => void) => void
   setParcelHighlightFn: (fn: (geom: GeoJSON.Geometry) => void) => void
+  // Bidirectional panel↔map tile highlight
+  highlightedTileId: string | null
+  setHighlightedTileId: (id: string | null) => void
 }
 
 export const useMapStore = create<MapState>((set, get) => ({
@@ -73,6 +89,39 @@ export const useMapStore = create<MapState>((set, get) => ({
   setDataMode: (v) => set({ dataMode: v }),
   dataPanelWidth: Math.round(window.innerWidth / 3),
   setDataPanelWidth: (w) => set({ dataPanelWidth: w }),
+  tileGrid: [],
+  downloadedTileIds: new Set(),
+  downloadingTileIds: new Set(),
+  tileGridLoading: false,
+  setTileGrid: (tiles) => set({ tileGrid: tiles }),
+  setDownloadedTileIds: (ids) => set({ downloadedTileIds: new Set(ids) }),
+  addDownloadedTileId: (id) => set((s) => ({ downloadedTileIds: new Set([...s.downloadedTileIds, id]) })),
+  removeDownloadedTileId: (id) => set((s) => {
+    const next = new Set(s.downloadedTileIds)
+    next.delete(id)
+    return { downloadedTileIds: next }
+  }),
+  setTileGridLoading: (v) => set({ tileGridLoading: v }),
+  triggerTileDownload: async (id, url) => {
+    set((s) => ({ downloadingTileIds: new Set([...s.downloadingTileIds, id]) }))
+    try {
+      const result = await apiDownloadTile(id, url)
+      set((s) => {
+        const downloading = new Set(s.downloadingTileIds)
+        downloading.delete(id)
+        return {
+          downloadedTileIds: new Set([...s.downloadedTileIds, result.id]),
+          downloadingTileIds: downloading,
+        }
+      })
+    } catch {
+      set((s) => {
+        const downloading = new Set(s.downloadingTileIds)
+        downloading.delete(id)
+        return { downloadingTileIds: downloading }
+      })
+    }
+  },
   setActiveBaseLayer: (id) => set({ activeBaseLayerId: id }),
   setMapInstance: (map) => set({ mapInstance: map }),
   setLookupParcel: (fn) => set({ lookupParcel: fn }),
@@ -86,4 +135,6 @@ export const useMapStore = create<MapState>((set, get) => ({
   setClearHighlight: (fn) => set({ clearHighlight: fn }),
   setHighlightBuildingFn: (fn) => set({ setHighlightBuilding: fn }),
   setParcelHighlightFn: (fn) => set({ parcelHighlightFn: fn }),
+  highlightedTileId: null,
+  setHighlightedTileId: (id) => set({ highlightedTileId: id }),
 }))
