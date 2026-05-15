@@ -18,7 +18,8 @@ const CADASTRAL_WMS = [
 export default function MapView() {
   const mapContainer = useRef<HTMLDivElement>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
-  const { activeBaseLayerId, setMapInstance, setLookupParcel,
+  const mapReadyRef = useRef(false)
+  const { activeBaseLayerId, dataMode, setMapInstance, setLookupParcel,
           setParcelLoading, setParcelResult, clearParcel } = useMapStore()
 
   useEffect(() => {
@@ -48,6 +49,7 @@ export default function MapView() {
     map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left')
 
     map.on('load', () => {
+      mapReadyRef.current = true
       // Cadastral overlay — always on, 50% opacity, zoom ≥ 14
       map.addSource('cadastral', {
         type: 'raster',
@@ -164,6 +166,11 @@ export default function MapView() {
       )
     })
 
+    // Register parcel highlight restore callback (used when exiting data mode)
+    useMapStore.getState().setParcelHighlightFn((geom) => {
+      highlightSource()?.setData({ type: 'Feature', geometry: geom, properties: {} })
+    })
+
     mapRef.current = map
     setMapInstance(map)
 
@@ -198,9 +205,24 @@ export default function MapView() {
       )
     }
 
-    if (map.isStyleLoaded()) swap()
+    if (mapReadyRef.current) swap()
     else map.once('load', swap)
   }, [activeBaseLayerId])
+
+  // Enforce cadastral visibility whenever dataMode or base layer changes.
+  // The TopBar also calls setLayoutProperty directly on click (immediate),
+  // but this effect is the safety net for remounts and layer-swap timing.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    const apply = () => {
+      if (map.getLayer('cadastral')) {
+        map.setLayoutProperty('cadastral', 'visibility', dataMode ? 'none' : 'visible')
+      }
+    }
+    if (mapReadyRef.current) apply()
+    else map.once('load', apply)
+  }, [dataMode, activeBaseLayerId])
 
   return <div ref={mapContainer} className="absolute inset-0" />
 }
