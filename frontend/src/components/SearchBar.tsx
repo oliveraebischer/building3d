@@ -8,10 +8,14 @@ type Suggestion = {
   lat: number
   lon: number
   zoomlevel: number
+  origin: string
 }
 
 const GEOCODE_URL = 'https://api3.geo.admin.ch/rest/services/api/SearchServer'
 const DEFAULT_ZOOM = 14
+const ADDRESS_ZOOM = 18
+// Origins that represent point addresses (trigger parcel lookup + deep zoom)
+const ADDRESS_ORIGINS = new Set(['address'])
 
 function stripHtml(html: string) {
   return html.replace(/<[^>]+>/g, '')
@@ -39,6 +43,7 @@ export default function SearchBar() {
         id: r.id, label: r.attrs.label, detail: r.attrs.detail,
         lat: r.attrs.lat, lon: r.attrs.lon,
         zoomlevel: r.attrs.zoomlevel < 25 ? r.attrs.zoomlevel : DEFAULT_ZOOM,
+        origin: r.attrs.origin ?? '',
       }))
       setSuggestions(results)
       setOpen(results.length > 0)
@@ -59,15 +64,17 @@ export default function SearchBar() {
 
     if (!mapInstance) return
 
-    // Zoom to 18 for address-level detail (cadastral + building clearly visible)
-    const targetZoom = 18
+    const isAddress = ADDRESS_ORIGINS.has(s.origin)
+    const targetZoom = isAddress ? ADDRESS_ZOOM : s.zoomlevel
 
     mapInstance.flyTo({ center: [s.lon, s.lat], zoom: targetZoom, duration: 1200 })
 
-    // After fly ends, trigger parcel lookup with loading indicator
-    mapInstance.once('moveend', () => {
-      lookupParcel?.(s.lon, s.lat, true)
-    })
+    // Only look up parcels for address results (not municipalities, regions, etc.)
+    if (isAddress) {
+      mapInstance.once('moveend', () => {
+        lookupParcel?.(s.lon, s.lat, true)
+      })
+    }
   }
 
   useEffect(() => {

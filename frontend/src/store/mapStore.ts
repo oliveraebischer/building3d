@@ -39,16 +39,23 @@ type MapState = {
   selectedParcel: ParcelFeature | null
   selectedGWR: GwrFeature[]
   parcelError: boolean
+  // Data mode
+  dataMode: boolean
+  setDataMode: (v: boolean) => void
+  dataPanelWidth: number
+  setDataPanelWidth: (w: number) => void
   setActiveBaseLayer: (id: string) => void
   setMapInstance: (map: maplibregl.Map | null) => void
   setLookupParcel: (fn: ((lng: number, lat: number, showLoading?: boolean) => void) | null) => void
   clearHighlight: (() => void) | null
   setHighlightBuilding: ((geom: GeoJSON.Geometry | null) => void) | null
+  parcelHighlightFn: ((geom: GeoJSON.Geometry) => void) | null
   setParcelLoading: (v: boolean) => void
   setParcelResult: (parcel: ParcelFeature | null, gwr: GwrFeature[], error?: boolean) => void
   clearParcel: () => void
   setClearHighlight: (fn: () => void) => void
   setHighlightBuildingFn: (fn: (geom: GeoJSON.Geometry | null) => void) => void
+  setParcelHighlightFn: (fn: (geom: GeoJSON.Geometry) => void) => void
 }
 
 export const useMapStore = create<MapState>((set, get) => ({
@@ -61,6 +68,11 @@ export const useMapStore = create<MapState>((set, get) => ({
   parcelError: false,
   clearHighlight: null,
   setHighlightBuilding: null,
+  parcelHighlightFn: null,
+  dataMode: false,
+  setDataMode: (v) => set({ dataMode: v }),
+  dataPanelWidth: Math.round(window.innerWidth / 3),
+  setDataPanelWidth: (w) => set({ dataPanelWidth: w }),
   setActiveBaseLayer: (id) => set({ activeBaseLayerId: id }),
   setMapInstance: (map) => set({ mapInstance: map }),
   setLookupParcel: (fn) => set({ lookupParcel: fn }),
@@ -73,4 +85,5 @@ export const useMapStore = create<MapState>((set, get) => ({
   },
   setClearHighlight: (fn) => set({ clearHighlight: fn }),
   setHighlightBuildingFn: (fn) => set({ setHighlightBuilding: fn }),
+  setParcelHighlightFn: (fn) => set({ parcelHighlightFn: fn }),
 }))
