@@ -1,5 +1,7 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react'
 import { useMapStore } from '../store/mapStore'
+
+export type SearchBarHandle = { focus: () => void }
 
 type Suggestion = {
   id: number
@@ -21,7 +23,7 @@ function stripHtml(html: string) {
   return html.replace(/<[^>]+>/g, '')
 }
 
-export default function SearchBar() {
+const SearchBar = forwardRef<SearchBarHandle, {}>((_, ref) => {
   const [query, setQuery] = useState('')
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
   const [open, setOpen] = useState(false)
@@ -30,6 +32,8 @@ export default function SearchBar() {
   const inputRef = useRef<HTMLInputElement>(null)
   const mapInstance = useMapStore((s) => s.mapInstance)
   const lookupParcel = useMapStore((s) => s.lookupParcel)
+
+  useImperativeHandle(ref, () => ({ focus: () => inputRef.current?.focus() }))
 
   const fetchSuggestions = useCallback(async (text: string) => {
     if (text.trim().length < 2) { setSuggestions([]); setOpen(false); return }
@@ -86,7 +90,7 @@ export default function SearchBar() {
   }, [])
 
   return (
-    <div data-searchbar className="relative w-80">
+    <div data-searchbar className="relative w-full">
       {/* Input */}
       <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-colors
                        bg-[#161616]
@@ -138,4 +142,7 @@ export default function SearchBar() {
       )}
     </div>
   )
-}
+})
+
+SearchBar.displayName = 'SearchBar'
+export default SearchBar

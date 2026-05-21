@@ -100,7 +100,7 @@ export default function DataPanel() {
   const downloadCount = downloadedTileIds.size
 
   return (
-    <div className="h-full flex flex-col overflow-y-auto" style={{ paddingTop: 46 }}>
+    <div className="h-full flex flex-col overflow-y-auto">
       <div className="m-3 rounded-xl border border-white/[0.08] bg-[#161616] overflow-hidden">
 
         {/* Card header */}

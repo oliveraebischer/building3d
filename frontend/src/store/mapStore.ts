@@ -44,8 +44,10 @@ type MapState = {
   // Data mode
   dataMode: boolean
   setDataMode: (v: boolean) => void
-  dataPanelWidth: number
-  setDataPanelWidth: (w: number) => void
+  sidebarWidth: number
+  setSidebarWidth: (w: number) => void
+  sidebarCollapsed: boolean
+  setSidebarCollapsed: (v: boolean) => void
   // Tile downloader
   tileGrid: TileGridFeature[]
   downloadedTileIds: Set<string>
@@ -87,8 +89,10 @@ export const useMapStore = create<MapState>((set, get) => ({
   parcelHighlightFn: null,
   dataMode: false,
   setDataMode: (v) => set({ dataMode: v }),
-  dataPanelWidth: Math.round(window.innerWidth / 3),
-  setDataPanelWidth: (w) => set({ dataPanelWidth: w }),
+  sidebarWidth: 260,
+  setSidebarWidth: (w) => set({ sidebarWidth: w }),
+  sidebarCollapsed: false,
+  setSidebarCollapsed: (v) => set({ sidebarCollapsed: v }),
   tileGrid: [],
   downloadedTileIds: new Set(),
   downloadingTileIds: new Set(),

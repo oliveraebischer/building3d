@@ -43,8 +43,7 @@
 /* Hide compass */
 .maplibregl-ctrl-compass { display: none !important; }
 
-/* Push top-right controls below the TopBar (~50px) */
-.maplibregl-ctrl-top-right { top: 56px !important; }
+.maplibregl-ctrl-top-right { top: 8px !important; }
 
 .maplibregl-ctrl-scale {
   background: rgba(13,13,13,0.75) !important;

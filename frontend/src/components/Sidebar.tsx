@@ -1,0 +1,296 @@
+import { useRef, useState, useCallback, useEffect } from 'react'
+import SearchBar, { type SearchBarHandle } from './SearchBar'
+import DataPanel from './DataPanel'
+import { useMapStore } from '../store/mapStore'
+import type { ParcelFeature, GwrFeature } from '../api/geoAdmin'
+import type maplibregl from 'maplibre-gl'
+import { COLLAPSED_W, EXPANDED_W, DATA_W, SEPARATOR_W } from '../constants'
+
+const PAD_NONE = { top: 0, bottom: 0, left: 0, right: 0 }
+const DATA_MODE_ZOOM = 14.7
+const CADASTRAL_LAYER = 'cadastral'
+
+function setCadastral(map: maplibregl.Map, visible: boolean) {
+  if (map.getLayer(CADASTRAL_LAYER))
+    map.setLayoutProperty(CADASTRAL_LAYER, 'visibility', visible ? 'visible' : 'none')
+}
+
+function SearchIcon() {
+  return (
+    <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2}
+      strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+      <circle cx="11" cy="11" r="6" />
+      <path d="M21 21l-4.35-4.35" />
+    </svg>
+  )
+}
+
+function GridIcon() {
+  return (
+    <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2}
+      strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+      <rect x="3" y="3" width="7" height="7" rx="1" />
+      <rect x="14" y="3" width="7" height="7" rx="1" />
+      <rect x="3" y="14" width="7" height="7" rx="1" />
+      <rect x="14" y="14" width="7" height="7" rx="1" />
+    </svg>
+  )
+}
+
+function Logo() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 26 26" fill="none" aria-hidden="true">
+      <rect width="26" height="26" rx="5" fill="white" />
+      <path d="M6 19 L13 7 L20 19 M9.5 15 H16.5"
+        stroke="#0D0D0D" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+export default function Sidebar() {
+  const {
+    sidebarCollapsed, setSidebarCollapsed,
+    sidebarWidth, setSidebarWidth,
+    dataMode, setDataMode,
+    activeBaseLayerId, setActiveBaseLayer,
+    mapInstance,
+    selectedParcel, selectedGWR,
+    clearHighlight, clearParcel,
+    setParcelResult, parcelHighlightFn,
+  } = useMapStore()
+
+  const searchBarRef = useRef<SearchBarHandle>(null)
+  const isDragging = useRef(false)
+  const [isResizing, setIsResizing] = useState(false)
+
+  // Data mode save/restore refs
+  const prevLayerRef = useRef(activeBaseLayerId)
+  const prevZoomRef = useRef<number | null>(null)
+  const prevCenterRef = useRef<maplibregl.LngLat | null>(null)
+  const prevParcelRef = useRef<ParcelFeature | null>(null)
+  const prevGWRRef = useRef<GwrFeature[]>([])
+  const prevSidebarWidthRef = useRef<number>(sidebarWidth)
+
+  // Set initial map padding when map first becomes available
+  useEffect(() => {
+    if (!mapInstance) return
+    const w = sidebarCollapsed ? COLLAPSED_W : sidebarWidth
+    mapInstance.easeTo({ padding: { ...PAD_NONE, left: w + SEPARATOR_W }, duration: 0 })
+  }, [mapInstance]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Data mode toggle ──────────────────────────────────────────────────────
+  const handleDataClick = () => {
+    if (!dataMode) {
+      prevLayerRef.current = activeBaseLayerId
+      prevCenterRef.current = mapInstance?.getCenter() ?? null
+      prevParcelRef.current = selectedParcel
+      prevGWRRef.current = selectedGWR
+      prevSidebarWidthRef.current = sidebarWidth
+
+      setSidebarCollapsed(false)
+      setSidebarWidth(DATA_W)
+
+      const currentZoom = mapInstance?.getZoom() ?? DATA_MODE_ZOOM
+      const panPad = { ...PAD_NONE, left: DATA_W + SEPARATOR_W }
+      if (currentZoom > DATA_MODE_ZOOM) {
+        prevZoomRef.current = currentZoom
+        mapInstance?.easeTo({ padding: panPad, zoom: DATA_MODE_ZOOM, duration: 800 })
+      } else {
+        prevZoomRef.current = null
+        mapInstance?.easeTo({ padding: panPad, duration: 300 })
+      }
+
+      if (mapInstance) setCadastral(mapInstance, false)
+      setActiveBaseLayer('grau')
+      clearHighlight?.()
+      clearParcel()
+      setDataMode(true)
+    } else {
+      const zoomToRestore = prevZoomRef.current
+      const widthToRestore = prevSidebarWidthRef.current
+      prevZoomRef.current = null
+
+      if (mapInstance) setCadastral(mapInstance, true)
+      setActiveBaseLayer(prevLayerRef.current)
+
+      if (prevParcelRef.current) {
+        setParcelResult(prevParcelRef.current, prevGWRRef.current)
+        parcelHighlightFn?.(prevParcelRef.current.geometry)
+      }
+
+      setSidebarWidth(widthToRestore)
+      setDataMode(false)
+
+      mapInstance?.easeTo({
+        padding: { ...PAD_NONE, left: widthToRestore + SEPARATOR_W },
+        ...(prevCenterRef.current ? { center: prevCenterRef.current } : {}),
+        ...(zoomToRestore !== null ? { zoom: zoomToRestore } : {}),
+        duration: 500,
+      })
+    }
+  }
+
+  // ── Collapse / expand ─────────────────────────────────────────────────────
+  const handleToggleCollapse = () => {
+    if (sidebarCollapsed) {
+      setSidebarCollapsed(false)
+      mapInstance?.easeTo({ padding: { ...PAD_NONE, left: sidebarWidth + SEPARATOR_W }, duration: 300 })
+    } else {
+      setSidebarCollapsed(true)
+      mapInstance?.easeTo({ padding: { ...PAD_NONE, left: COLLAPSED_W + SEPARATOR_W }, duration: 300 })
+    }
+  }
+
+  const handleSearchIconClick = () => {
+    if (sidebarCollapsed) {
+      setSidebarCollapsed(false)
+      mapInstance?.easeTo({ padding: { ...PAD_NONE, left: sidebarWidth + SEPARATOR_W }, duration: 300 })
+      setTimeout(() => searchBarRef.current?.focus(), 310)
+    } else {
+      searchBarRef.current?.focus()
+    }
+  }
+
+  // ── Separator drag ────────────────────────────────────────────────────────
+  const onSeparatorMouseDown = useCallback(() => {
+    isDragging.current = true
+    setIsResizing(true)
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'col-resize'
+  }, [])
+
+  useEffect(() => {
+    const minW = EXPANDED_W - 60
+    const onMouseMove = (e: MouseEvent) => {
+      if (!isDragging.current) return
+      const w = Math.max(minW, Math.min(e.clientX, window.innerWidth - 360))
+      setSidebarWidth(w)
+      mapInstance?.easeTo({ padding: { ...PAD_NONE, left: w + SEPARATOR_W }, duration: 0 })
+    }
+    const onMouseUp = () => {
+      if (!isDragging.current) return
+      isDragging.current = false
+      setIsResizing(false)
+      document.body.style.userSelect = ''
+      document.body.style.cursor = ''
+    }
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+    }
+  }, [mapInstance, setSidebarWidth])
+
+  const currentWidth = sidebarCollapsed ? COLLAPSED_W : sidebarWidth
+
+  return (
+    <>
+      {/* Sidebar panel */}
+      <div
+        className="absolute top-0 bottom-0 left-0 z-20 bg-[#0d0d0d]/95 border-r border-white/[0.07] overflow-hidden"
+        style={{
+          width: currentWidth,
+          transition: isResizing ? 'none' : 'width 280ms cubic-bezier(0.4,0,0.2,1)',
+        }}
+      >
+        {sidebarCollapsed ? (
+          // ── Collapsed: icon strip ─────────────────────────────────────────
+          <div className="flex flex-col items-center pt-2 gap-0.5">
+            <button
+              onClick={handleToggleCollapse}
+              className="w-9 h-9 flex items-center justify-center rounded-lg text-white/35 hover:text-white hover:bg-white/[0.06] transition-colors"
+              aria-label="Expand sidebar"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2}
+                strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                <path d="M9 18l6-6-6-6" />
+              </svg>
+            </button>
+
+            <div className="w-6 border-t border-white/[0.07] my-1.5" />
+
+            <button
+              onClick={handleSearchIconClick}
+              className="w-9 h-9 flex items-center justify-center rounded-lg text-white/35 hover:text-white hover:bg-white/[0.06] transition-colors"
+              aria-label="Search"
+            >
+              <SearchIcon />
+            </button>
+
+            <button
+              onClick={handleDataClick}
+              className={`w-9 h-9 flex items-center justify-center rounded-lg transition-colors ${
+                dataMode
+                  ? 'bg-white text-[#0d0d0d]'
+                  : 'text-white/35 hover:text-white hover:bg-white/[0.06]'
+              }`}
+              aria-label="Data"
+            >
+              <GridIcon />
+            </button>
+          </div>
+        ) : (
+          // ── Expanded ──────────────────────────────────────────────────────
+          <div className="flex flex-col h-full">
+            {/* Header: logo + collapse button */}
+            <div className="flex items-center justify-between px-3 py-2.5 border-b border-white/[0.07] shrink-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <Logo />
+                <span className="text-white font-semibold tracking-widest text-xs uppercase truncate">
+                  Building3D
+                </span>
+              </div>
+              <button
+                onClick={handleToggleCollapse}
+                className="ml-2 w-7 h-7 shrink-0 flex items-center justify-center rounded-md text-white/30 hover:text-white hover:bg-white/[0.06] transition-colors"
+                aria-label="Collapse sidebar"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2}
+                  strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                  <path d="M15 18l-6-6 6-6" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Search */}
+            <div className="px-3 pt-3 pb-2 shrink-0">
+              <SearchBar ref={searchBarRef} />
+            </div>
+
+            {/* Data entry */}
+            <div className="px-3 pb-3 shrink-0">
+              <button
+                onClick={handleDataClick}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold tracking-wide transition-colors ${
+                  dataMode
+                    ? 'bg-white text-[#0d0d0d]'
+                    : 'border border-white/[0.08] text-white/50 hover:border-white/20 hover:text-white/80'
+                }`}
+              >
+                <GridIcon />
+                Data
+              </button>
+            </div>
+
+            {/* Data panel content */}
+            {dataMode && (
+              <div className="flex-1 overflow-hidden border-t border-white/[0.07]">
+                <DataPanel />
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Separator — hidden when collapsed to avoid floating handle */}
+      {!sidebarCollapsed && (
+        <div
+          className="absolute top-0 bottom-0 z-20 w-1 cursor-col-resize bg-white/[0.07] hover:bg-white/20 transition-colors"
+          style={{ left: sidebarWidth }}
+          onMouseDown={onSeparatorMouseDown}
+        />
+      )}
+    </>
+  )
+}
