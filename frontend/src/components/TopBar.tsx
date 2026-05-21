@@ -29,6 +29,7 @@ export default function TopBar() {
 
   const prevLayerRef = useRef(activeBaseLayerId)
   const prevZoomRef = useRef<number | null>(null)
+  const prevCenterRef = useRef<maplibregl.LngLat | null>(null)
   const prevParcelRef = useRef<ParcelFeature | null>(null)
   const prevGWRRef = useRef<GwrFeature[]>([])
 
@@ -36,6 +37,7 @@ export default function TopBar() {
     if (!dataMode) {
       // ── Save current state ──
       prevLayerRef.current = activeBaseLayerId
+      prevCenterRef.current = mapInstance?.getCenter() ?? null
       prevParcelRef.current = selectedParcel
       prevGWRRef.current = selectedGWR
 
@@ -76,9 +78,10 @@ export default function TopBar() {
 
       setDataMode(false)
 
-      // Combine padding removal + optional zoom restore into one camera op
+      // Combine padding removal + center + optional zoom restore into one camera op
       mapInstance?.easeTo({
         padding: PAD_NONE,
+        ...(prevCenterRef.current ? { center: prevCenterRef.current } : {}),
         ...(zoomToRestore !== null ? { zoom: zoomToRestore } : {}),
         duration: 500,
       })
