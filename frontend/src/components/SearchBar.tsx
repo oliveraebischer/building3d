@@ -3,6 +3,14 @@ import { useMapStore } from '../store/mapStore'
 
 export type SearchBarHandle = { focus: () => void }
 
+export type SearchSelectEntry = {
+  label: string
+  lat: number
+  lon: number
+  zoomlevel: number
+  origin: string
+}
+
 type Suggestion = {
   id: number
   label: string
@@ -23,7 +31,9 @@ function stripHtml(html: string) {
   return html.replace(/<[^>]+>/g, '')
 }
 
-const SearchBar = forwardRef<SearchBarHandle, {}>((_, ref) => {
+type SearchBarProps = { onSelect?: (entry: SearchSelectEntry) => void }
+
+const SearchBar = forwardRef<SearchBarHandle, SearchBarProps>(({ onSelect }, ref) => {
   const [query, setQuery] = useState('')
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
   const [open, setOpen] = useState(false)
@@ -62,7 +72,8 @@ const SearchBar = forwardRef<SearchBarHandle, {}>((_, ref) => {
   }
 
   const handleSelect = (s: Suggestion) => {
-    setQuery(stripHtml(s.label))
+    const cleanLabel = stripHtml(s.label)
+    setQuery(cleanLabel)
     setOpen(false)
     setSuggestions([])
 
@@ -73,12 +84,13 @@ const SearchBar = forwardRef<SearchBarHandle, {}>((_, ref) => {
 
     mapInstance.flyTo({ center: [s.lon, s.lat], zoom: targetZoom, duration: 1200 })
 
-    // Only look up parcels for address results (not municipalities, regions, etc.)
     if (isAddress) {
       mapInstance.once('moveend', () => {
         lookupParcel?.(s.lon, s.lat, true)
       })
     }
+
+    onSelect?.({ label: cleanLabel, lat: s.lat, lon: s.lon, zoomlevel: s.zoomlevel, origin: s.origin })
   }
 
   useEffect(() => {

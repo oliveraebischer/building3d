@@ -24,6 +24,8 @@ export default function MapView() {
           setParcelLoading, setParcelResult, clearParcel,
           highlightedTileId } = useMapStore()
   const prevHighlightedRef = useRef<string | null>(null)
+  const activeLayerRef = useRef<string>('swisstopo-base')
+  const pendingSwapRef = useRef<{ cancel: () => void } | null>(null)
 
   useEffect(() => {
     if (!mapContainer.current || mapRef.current) return
@@ -53,6 +55,9 @@ export default function MapView() {
 
     map.on('load', () => {
       mapReadyRef.current = true
+      // Dark background — shows during tile-loading gaps instead of white canvas
+      map.addLayer({ id: 'bg', type: 'background', paint: { 'background-color': '#0d0d0d' } })
+
       // Cadastral overlay — always on, 50% opacity, zoom ≥ 14
       map.addSource('cadastral', {
         type: 'raster',
@@ -264,7 +269,7 @@ export default function MapView() {
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Swap base layer
+  // Swap base layer — crossfade: add new layer first, wait for tiles, then fade
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
@@ -272,18 +277,52 @@ export default function MapView() {
     if (!layer) return
 
     const swap = () => {
-      if (map.getLayer('swisstopo-base')) map.removeLayer('swisstopo-base')
-      if (map.getSource('swisstopo-base')) map.removeSource('swisstopo-base')
-      map.addSource('swisstopo-base', {
-        type: 'raster',
-        tiles: [layer.url],
-        tileSize: 256,
-        attribution: layer.attribution,
-      })
+      // Cancel any in-flight swap
+      pendingSwapRef.current?.cancel()
+
+      const curId = activeLayerRef.current
+      const nextId = curId === 'swisstopo-base' ? 'swisstopo-next' : 'swisstopo-base'
+
+      // Add new source + layer below cadastral, fully transparent, instant tile render
+      map.addSource(nextId, { type: 'raster', tiles: [layer.url], tileSize: 256, attribution: layer.attribution })
       map.addLayer(
-        { id: 'swisstopo-base', type: 'raster', source: 'swisstopo-base' },
-        map.getLayer('cadastral') ? 'cadastral' : undefined,
+        { id: nextId, type: 'raster', source: nextId, paint: { 'raster-opacity': 0, 'raster-fade-duration': 0 } },
+        map.getLayer('cadastral') ? 'cadastral' : curId,
       )
+
+      let cancelled = false
+
+      const finish = () => {
+        if (cancelled) return
+        pendingSwapRef.current = null
+
+        // Crossfade: new in, old out over 350 ms
+        const transition = { duration: 350, delay: 0 }
+        map.setPaintProperty(nextId, 'raster-opacity-transition', transition)
+        map.setPaintProperty(curId,  'raster-opacity-transition', transition)
+        map.setPaintProperty(nextId, 'raster-opacity', 1)
+        map.setPaintProperty(curId,  'raster-opacity', 0)
+
+        setTimeout(() => {
+          if (map.getLayer(curId))  map.removeLayer(curId)
+          if (map.getSource(curId)) map.removeSource(curId)
+          activeLayerRef.current = nextId
+        }, 360)
+      }
+
+      map.once('idle', finish)
+      const fallback = setTimeout(finish, 1500)
+
+      pendingSwapRef.current = {
+        cancel: () => {
+          cancelled = true
+          map.off('idle', finish)
+          clearTimeout(fallback)
+          // Clean up the partially-added next layer/source
+          if (map.getLayer(nextId))  map.removeLayer(nextId)
+          if (map.getSource(nextId)) map.removeSource(nextId)
+        },
+      }
     }
 
     if (mapReadyRef.current) swap()

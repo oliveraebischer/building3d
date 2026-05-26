@@ -1,12 +1,23 @@
 import { useRef, useState, useCallback, useEffect } from 'react'
-import SearchBar, { type SearchBarHandle } from './SearchBar'
+import SearchBar, { type SearchBarHandle, type SearchSelectEntry } from './SearchBar'
 import DataPanel from './DataPanel'
+import SettingsPanel from './SettingsPanel'
 import { useMapStore } from '../store/mapStore'
 import type { ParcelFeature, GwrFeature } from '../api/geoAdmin'
 import type maplibregl from 'maplibre-gl'
 import { COLLAPSED_W, EXPANDED_W, DATA_W, SEPARATOR_W } from '../constants'
 
 const PAD_NONE = { top: 0, bottom: 0, left: 0, right: 0 }
+const RECENT_KEY = 'building3d_recent_searches'
+const MAX_RECENT = 10
+const ADDRESS_ZOOM = 18
+
+function loadRecent(): SearchSelectEntry[] {
+  try { return JSON.parse(localStorage.getItem(RECENT_KEY) ?? '[]') } catch { return [] }
+}
+function saveRecent(entries: SearchSelectEntry[]) {
+  localStorage.setItem(RECENT_KEY, JSON.stringify(entries))
+}
 const DATA_MODE_ZOOM = 14.7
 const CADASTRAL_LAYER = 'cadastral'
 
@@ -21,6 +32,16 @@ function SearchIcon() {
       strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
       <circle cx="11" cy="11" r="6" />
       <path d="M21 21l-4.35-4.35" />
+    </svg>
+  )
+}
+
+function GearIcon() {
+  return (
+    <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2}
+      strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
     </svg>
   )
 }
@@ -54,6 +75,7 @@ export default function Sidebar() {
     dataMode, setDataMode,
     activeBaseLayerId, setActiveBaseLayer,
     mapInstance,
+    lookupParcel,
     selectedParcel, selectedGWR,
     clearHighlight, clearParcel,
     setParcelResult, parcelHighlightFn,
@@ -62,6 +84,27 @@ export default function Sidebar() {
   const searchBarRef = useRef<SearchBarHandle>(null)
   const isDragging = useRef(false)
   const [isResizing, setIsResizing] = useState(false)
+  const [settingsMode, setSettingsMode] = useState(false)
+  const [recentSearches, setRecentSearches] = useState<SearchSelectEntry[]>(() => loadRecent())
+
+  const handleSearchSelect = useCallback((entry: SearchSelectEntry) => {
+    setRecentSearches(prev => {
+      const filtered = prev.filter(r => r.label !== entry.label)
+      const next = [entry, ...filtered].slice(0, MAX_RECENT)
+      saveRecent(next)
+      return next
+    })
+  }, [])
+
+  const handleRecentClick = useCallback((entry: SearchSelectEntry) => {
+    if (!mapInstance) return
+    const isAddress = entry.origin === 'address'
+    const targetZoom = isAddress ? ADDRESS_ZOOM : entry.zoomlevel
+    mapInstance.flyTo({ center: [entry.lon, entry.lat], zoom: targetZoom, duration: 1200 })
+    if (isAddress) {
+      mapInstance.once('moveend', () => lookupParcel?.(entry.lon, entry.lat, true))
+    }
+  }, [mapInstance, lookupParcel])
 
   // Data mode save/restore refs
   const prevLayerRef = useRef(activeBaseLayerId)
@@ -85,7 +128,9 @@ export default function Sidebar() {
       prevCenterRef.current = mapInstance?.getCenter() ?? null
       prevParcelRef.current = selectedParcel
       prevGWRRef.current = selectedGWR
-      prevSidebarWidthRef.current = sidebarWidth
+      // Don't overwrite the saved width when switching from settings — it already holds the pre-panel value
+      if (!settingsMode) prevSidebarWidthRef.current = sidebarWidth
+      setSettingsMode(false)
 
       setSidebarCollapsed(false)
       setSidebarWidth(DATA_W)
@@ -127,6 +172,25 @@ export default function Sidebar() {
         ...(zoomToRestore !== null ? { zoom: zoomToRestore } : {}),
         duration: 500,
       })
+    }
+  }
+
+  // ── Settings mode toggle ──────────────────────────────────────────────────
+  const handleSettingsClick = () => {
+    if (settingsMode) {
+      const widthToRestore = prevSidebarWidthRef.current
+      setSidebarWidth(widthToRestore)
+      setSettingsMode(false)
+      mapInstance?.easeTo({ padding: { ...PAD_NONE, left: widthToRestore + SEPARATOR_W }, duration: 500 })
+    } else {
+      // Exit data mode first if active (restores map state; prevSidebarWidthRef already holds pre-data width)
+      if (dataMode) handleDataClick()
+      // Only save width when coming from normal mode; from data mode the ref is already correct
+      if (!dataMode) prevSidebarWidthRef.current = sidebarWidth
+      setSidebarCollapsed(false)
+      setSidebarWidth(DATA_W)
+      setSettingsMode(true)
+      mapInstance?.easeTo({ padding: { ...PAD_NONE, left: DATA_W + SEPARATOR_W }, duration: 300 })
     }
   }
 
@@ -229,10 +293,22 @@ export default function Sidebar() {
             >
               <GridIcon />
             </button>
+
+            <button
+              onClick={handleSettingsClick}
+              className={`w-9 h-9 flex items-center justify-center rounded-lg transition-colors ${
+                settingsMode
+                  ? 'bg-white text-[#0d0d0d]'
+                  : 'text-white/35 hover:text-white hover:bg-white/[0.06]'
+              }`}
+              aria-label="Settings"
+            >
+              <GearIcon />
+            </button>
           </div>
         ) : (
           // ── Expanded ──────────────────────────────────────────────────────
-          <div className="flex flex-col h-full">
+          <div className="flex flex-col h-full overflow-hidden">
             {/* Header: logo + collapse button */}
             <div className="flex items-center justify-between px-3 py-2.5 border-b border-white/[0.07] shrink-0">
               <div className="flex items-center gap-2 min-w-0">
@@ -255,11 +331,33 @@ export default function Sidebar() {
 
             {/* Search */}
             <div className="px-3 pt-3 pb-2 shrink-0">
-              <SearchBar ref={searchBarRef} />
+              <SearchBar ref={searchBarRef} onSelect={handleSearchSelect} />
             </div>
 
-            {/* Data entry */}
-            <div className="px-3 pb-3 shrink-0">
+            {/* Recent searches */}
+            {recentSearches.length > 0 && (
+              <div className="px-3 pb-2 shrink-0">
+                <div className="text-[10px] text-white/25 uppercase tracking-widest px-1 mb-0.5">Recent</div>
+                <ul>
+                  {recentSearches.map((entry, i) => (
+                    <li key={i}>
+                      <button
+                        onClick={() => handleRecentClick(entry)}
+                        className="w-full text-left px-2 py-1 rounded-md text-xs text-white/45 hover:text-white/80 hover:bg-white/[0.05] transition-colors truncate"
+                      >
+                        {entry.label}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Spacer — pushes accordion to bottom */}
+            <div className="flex-1" />
+
+            {/* Data button */}
+            <div className="shrink-0 border-t border-white/[0.07] px-3 pt-2 pb-1.5">
               <button
                 onClick={handleDataClick}
                 className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold tracking-wide transition-colors ${
@@ -273,12 +371,26 @@ export default function Sidebar() {
               </button>
             </div>
 
-            {/* Data panel content */}
-            {dataMode && (
-              <div className="flex-1 overflow-hidden border-t border-white/[0.07]">
-                <DataPanel />
-              </div>
-            )}
+            {/* Data panel — inline between Data and Settings buttons */}
+            {dataMode && <DataPanel />}
+
+            {/* Settings button */}
+            <div className="shrink-0 border-t border-white/[0.07] px-3 pt-1.5 pb-3">
+              <button
+                onClick={handleSettingsClick}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold tracking-wide transition-colors ${
+                  settingsMode
+                    ? 'bg-white text-[#0d0d0d]'
+                    : 'border border-white/[0.08] text-white/50 hover:border-white/20 hover:text-white/80'
+                }`}
+              >
+                <GearIcon />
+                Settings
+              </button>
+            </div>
+
+            {/* Settings panel — below Settings button */}
+            {settingsMode && <SettingsPanel />}
           </div>
         )}
       </div>

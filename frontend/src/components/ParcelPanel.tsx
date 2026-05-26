@@ -46,13 +46,13 @@ function ChevronIcon({ open }: { open: boolean }) {
 
 export default function ParcelPanel() {
   const { parcelLoading, selectedParcel, selectedGWR, parcelError,
-          clearParcel, clearHighlight, setHighlightBuilding } = useMapStore()
+          clearParcel, clearHighlight, setHighlightBuilding, mapInstance } = useMapStore()
   const [expandedEgids, setExpandedEgids] = useState<Set<string>>(new Set())
 
-  // Drag state
+  // Drag state — initial value is offscreen; snapped to SE corner on parcel load
   const [pos, setPos] = useState<{ x: number; y: number }>(() => ({
-    x: 12,
-    y: typeof window !== 'undefined' ? window.innerHeight - 400 : 100,
+    x: typeof window !== 'undefined' ? window.innerWidth * 0.65 : 800,
+    y: typeof window !== 'undefined' ? window.innerHeight * 0.65 : 500,
   }))
   const dragging = useRef(false)
   const dragOffset = useRef({ x: 0, y: 0 })
@@ -79,14 +79,23 @@ export default function ParcelPanel() {
     }
   }, [])
 
-  // Reset accordion when a new parcel is selected — first building open by default
+  // Snap panel to SE corner of parcel bounding box on each new parcel selection
   useEffect(() => {
-    if (selectedGWR.length > 0) {
-      const firstKey = selectedGWR[0].egid !== '—' ? selectedGWR[0].egid : '0'
-      setExpandedEgids(new Set([firstKey]))
-    } else {
-      setExpandedEgids(new Set())
-    }
+    if (!selectedParcel || !mapInstance) return
+    const coords = (selectedParcel.geometry.coordinates as [number, number][][]).flat()
+    const maxLng = Math.max(...coords.map(c => c[0]))
+    const minLat = Math.min(...coords.map(c => c[1]))
+    const pt = mapInstance.project([maxLng, minLat])
+    const PANEL_W = 280
+    const GAP = 10
+    const x = Math.min(pt.x + GAP, window.innerWidth - PANEL_W - GAP)
+    const y = Math.min(pt.y + GAP, window.innerHeight - 60)
+    setPos({ x: Math.max(GAP, x), y: Math.max(GAP, y) })
+  }, [selectedParcel, mapInstance])
+
+  // Reset accordion when a new parcel is selected — all collapsed by default
+  useEffect(() => {
+    setExpandedEgids(new Set())
   }, [selectedGWR])
 
   const toggleBuilding = (key: string) => {
