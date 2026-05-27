@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useMapStore } from '../store/mapStore'
 import { COLLAPSED_W, SEPARATOR_W } from '../constants'
+import BuildingViewer3D from './BuildingViewer3D'
 
 export default function AnalysisPanel() {
   const { sidebarCollapsed, sidebarWidth, sidebarResizing,
@@ -63,8 +64,8 @@ export default function AnalysisPanel() {
         onMouseDown={onDividerMouseDown}
       />
 
-      {/* Right panel — analysis info */}
-      <div className="flex-1 h-full bg-[#0d0d0d]/95 border-l border-white/[0.07] flex flex-col overflow-hidden">
+      {/* Right panel — 3D viewer */}
+      <div className="flex-1 h-full bg-[#080808] flex flex-col overflow-hidden">
         <div className="flex items-center justify-end px-4 py-3 border-b border-white/[0.06] shrink-0">
           <button
             onClick={() => setAnalysisMode(false)}
@@ -78,7 +79,9 @@ export default function AnalysisPanel() {
             Close Analysis
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto" />
+        <div className="flex-1 overflow-hidden">
+          <BuildingViewer3D />
+        </div>
       </div>
     </div>
   )
