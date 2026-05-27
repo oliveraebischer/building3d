@@ -4,6 +4,20 @@ import type { ParcelFeature, GwrFeature } from '../api/geoAdmin'
 import { downloadTile as apiDownloadTile } from '../api/tiles'
 import type { TileGridFeature } from '../api/tiles'
 
+export type PortfolioEntry = {
+  parcel: ParcelFeature
+  buildings: GwrFeature[]
+  addedAt: string
+}
+
+const PORTFOLIO_KEY = 'building3d_portfolio'
+function loadPortfolio(): PortfolioEntry[] {
+  try { return JSON.parse(localStorage.getItem(PORTFOLIO_KEY) ?? '[]') } catch { return [] }
+}
+function savePortfolio(entries: PortfolioEntry[]) {
+  localStorage.setItem(PORTFOLIO_KEY, JSON.stringify(entries))
+}
+
 export type BaseLayer = {
   id: string
   label: string
@@ -48,6 +62,10 @@ type MapState = {
   setSidebarWidth: (w: number) => void
   sidebarCollapsed: boolean
   setSidebarCollapsed: (v: boolean) => void
+  analysisMode: boolean
+  setAnalysisMode: (v: boolean) => void
+  sidebarResizing: boolean
+  setSidebarResizing: (v: boolean) => void
   // Tile downloader
   tileGrid: TileGridFeature[]
   downloadedTileIds: Set<string>
@@ -74,6 +92,12 @@ type MapState = {
   // Bidirectional panel↔map tile highlight
   highlightedTileId: string | null
   setHighlightedTileId: (id: string | null) => void
+  // Portfolio
+  portfolio: PortfolioEntry[]
+  addToPortfolio: (entry: PortfolioEntry) => void
+  removeFromPortfolio: (egrid: string) => void
+  portfolioHighlightFn: ((geoms: GeoJSON.Polygon[]) => void) | null
+  setPortfolioHighlightFn: (fn: (geoms: GeoJSON.Polygon[]) => void) => void
 }
 
 export const useMapStore = create<MapState>((set, get) => ({
@@ -93,6 +117,10 @@ export const useMapStore = create<MapState>((set, get) => ({
   setSidebarWidth: (w) => set({ sidebarWidth: w }),
   sidebarCollapsed: false,
   setSidebarCollapsed: (v) => set({ sidebarCollapsed: v }),
+  analysisMode: false,
+  setAnalysisMode: (v) => set({ analysisMode: v }),
+  sidebarResizing: false,
+  setSidebarResizing: (v) => set({ sidebarResizing: v }),
   tileGrid: [],
   downloadedTileIds: new Set(),
   downloadingTileIds: new Set(),
@@ -141,4 +169,17 @@ export const useMapStore = create<MapState>((set, get) => ({
   setParcelHighlightFn: (fn) => set({ parcelHighlightFn: fn }),
   highlightedTileId: null,
   setHighlightedTileId: (id) => set({ highlightedTileId: id }),
+  portfolio: loadPortfolio(),
+  addToPortfolio: (entry) => set((s) => {
+    const next = [entry, ...s.portfolio.filter(e => e.parcel.egrid !== entry.parcel.egrid)]
+    savePortfolio(next)
+    return { portfolio: next }
+  }),
+  removeFromPortfolio: (egrid) => set((s) => {
+    const next = s.portfolio.filter(e => e.parcel.egrid !== egrid)
+    savePortfolio(next)
+    return { portfolio: next }
+  }),
+  portfolioHighlightFn: null,
+  setPortfolioHighlightFn: (fn) => set({ portfolioHighlightFn: fn }),
 }))

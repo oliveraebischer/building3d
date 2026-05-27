@@ -2,7 +2,9 @@ import { useRef, useState, useCallback, useEffect } from 'react'
 import SearchBar, { type SearchBarHandle, type SearchSelectEntry } from './SearchBar'
 import DataPanel from './DataPanel'
 import SettingsPanel from './SettingsPanel'
+import PortfolioPanel from './PortfolioPanel'
 import { useMapStore } from '../store/mapStore'
+import type { PortfolioEntry } from '../store/mapStore'
 import type { ParcelFeature, GwrFeature } from '../api/geoAdmin'
 import type maplibregl from 'maplibre-gl'
 import { COLLAPSED_W, EXPANDED_W, DATA_W, SEPARATOR_W } from '../constants'
@@ -58,6 +60,27 @@ function GridIcon() {
   )
 }
 
+function BriefcaseIcon() {
+  return (
+    <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2}
+      strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+      <rect x="2" y="7" width="20" height="14" rx="2" />
+      <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2" />
+      <line x1="12" y1="12" x2="12" y2="12.01" />
+    </svg>
+  )
+}
+
+function computeBounds(entries: PortfolioEntry[]): [number, number, number, number] {
+  const coords = entries.flatMap(e => e.parcel.geometry.coordinates.flat() as [number, number][])
+  return [
+    Math.min(...coords.map(c => c[0])),
+    Math.min(...coords.map(c => c[1])),
+    Math.max(...coords.map(c => c[0])),
+    Math.max(...coords.map(c => c[1])),
+  ]
+}
+
 function Logo() {
   return (
     <svg width="22" height="22" viewBox="0 0 26 26" fill="none" aria-hidden="true">
@@ -79,12 +102,14 @@ export default function Sidebar() {
     selectedParcel, selectedGWR,
     clearHighlight, clearParcel,
     setParcelResult, parcelHighlightFn,
+    portfolio, portfolioHighlightFn,
+    sidebarResizing, setSidebarResizing,
   } = useMapStore()
 
   const searchBarRef = useRef<SearchBarHandle>(null)
   const isDragging = useRef(false)
-  const [isResizing, setIsResizing] = useState(false)
   const [settingsMode, setSettingsMode] = useState(false)
+  const [portfolioMode, setPortfolioMode] = useState(false)
   const [recentSearches, setRecentSearches] = useState<SearchSelectEntry[]>(() => loadRecent())
 
   const handleSearchSelect = useCallback((entry: SearchSelectEntry) => {
@@ -128,9 +153,10 @@ export default function Sidebar() {
       prevCenterRef.current = mapInstance?.getCenter() ?? null
       prevParcelRef.current = selectedParcel
       prevGWRRef.current = selectedGWR
-      // Don't overwrite the saved width when switching from settings — it already holds the pre-panel value
-      if (!settingsMode) prevSidebarWidthRef.current = sidebarWidth
+      // Don't overwrite the saved width when switching from another panel — it already holds the pre-panel value
+      if (!settingsMode && !portfolioMode) prevSidebarWidthRef.current = sidebarWidth
       setSettingsMode(false)
+      setPortfolioMode(false)
 
       setSidebarCollapsed(false)
       setSidebarWidth(DATA_W)
@@ -183,14 +209,39 @@ export default function Sidebar() {
       setSettingsMode(false)
       mapInstance?.easeTo({ padding: { ...PAD_NONE, left: widthToRestore + SEPARATOR_W }, duration: 500 })
     } else {
-      // Exit data mode first if active (restores map state; prevSidebarWidthRef already holds pre-data width)
+      // Exit other modes first; prevSidebarWidthRef already holds pre-panel value when coming from one
       if (dataMode) handleDataClick()
-      // Only save width when coming from normal mode; from data mode the ref is already correct
-      if (!dataMode) prevSidebarWidthRef.current = sidebarWidth
+      if (portfolioMode) { clearHighlight?.(); setPortfolioMode(false) }
+      // Only save width when coming from normal mode
+      if (!dataMode && !portfolioMode) prevSidebarWidthRef.current = sidebarWidth
       setSidebarCollapsed(false)
       setSidebarWidth(DATA_W)
       setSettingsMode(true)
       mapInstance?.easeTo({ padding: { ...PAD_NONE, left: DATA_W + SEPARATOR_W }, duration: 300 })
+    }
+  }
+
+  // ── Portfolio mode toggle ─────────────────────────────────────────────────
+  const handlePortfolioClick = () => {
+    if (portfolioMode) {
+      clearHighlight?.()
+      const widthToRestore = prevSidebarWidthRef.current
+      setSidebarWidth(widthToRestore)
+      setPortfolioMode(false)
+      mapInstance?.easeTo({ padding: { ...PAD_NONE, left: widthToRestore + SEPARATOR_W }, duration: 500 })
+    } else {
+      if (dataMode) handleDataClick()
+      if (settingsMode) { setSidebarWidth(prevSidebarWidthRef.current); setSettingsMode(false) }
+      if (!dataMode && !settingsMode) prevSidebarWidthRef.current = sidebarWidth
+      setSidebarCollapsed(false)
+      setSidebarWidth(DATA_W)
+      setPortfolioMode(true)
+      clearParcel()
+      mapInstance?.easeTo({ padding: { ...PAD_NONE, left: DATA_W + SEPARATOR_W }, duration: 300 })
+      if (portfolio.length > 0 && portfolioHighlightFn) {
+        portfolioHighlightFn(portfolio.map(e => e.parcel.geometry))
+        mapInstance?.fitBounds(computeBounds(portfolio), { padding: 80, duration: 1000 })
+      }
     }
   }
 
@@ -218,10 +269,10 @@ export default function Sidebar() {
   // ── Separator drag ────────────────────────────────────────────────────────
   const onSeparatorMouseDown = useCallback(() => {
     isDragging.current = true
-    setIsResizing(true)
+    setSidebarResizing(true)
     document.body.style.userSelect = 'none'
     document.body.style.cursor = 'col-resize'
-  }, [])
+  }, [setSidebarResizing])
 
   useEffect(() => {
     const minW = EXPANDED_W - 60
@@ -234,7 +285,7 @@ export default function Sidebar() {
     const onMouseUp = () => {
       if (!isDragging.current) return
       isDragging.current = false
-      setIsResizing(false)
+      setSidebarResizing(false)
       document.body.style.userSelect = ''
       document.body.style.cursor = ''
     }
@@ -244,7 +295,7 @@ export default function Sidebar() {
       window.removeEventListener('mousemove', onMouseMove)
       window.removeEventListener('mouseup', onMouseUp)
     }
-  }, [mapInstance, setSidebarWidth])
+  }, [mapInstance, setSidebarWidth, setSidebarResizing])
 
   const currentWidth = sidebarCollapsed ? COLLAPSED_W : sidebarWidth
 
@@ -255,7 +306,7 @@ export default function Sidebar() {
         className="absolute top-0 bottom-0 left-0 z-20 bg-[#0d0d0d]/95 border-r border-white/[0.07] overflow-hidden"
         style={{
           width: currentWidth,
-          transition: isResizing ? 'none' : 'width 280ms cubic-bezier(0.4,0,0.2,1)',
+          transition: sidebarResizing ? 'none' : 'width 280ms cubic-bezier(0.4,0,0.2,1)',
         }}
       >
         {sidebarCollapsed ? (
@@ -280,6 +331,18 @@ export default function Sidebar() {
               aria-label="Search"
             >
               <SearchIcon />
+            </button>
+
+            <button
+              onClick={handlePortfolioClick}
+              className={`w-9 h-9 flex items-center justify-center rounded-lg transition-colors ${
+                portfolioMode
+                  ? 'bg-white text-[#0d0d0d]'
+                  : 'text-white/35 hover:text-white hover:bg-white/[0.06]'
+              }`}
+              aria-label="Portfolio"
+            >
+              <BriefcaseIcon />
             </button>
 
             <button
@@ -355,6 +418,24 @@ export default function Sidebar() {
 
             {/* Spacer — pushes accordion to bottom */}
             <div className="flex-1" />
+
+            {/* Portfolio button */}
+            <div className="shrink-0 border-t border-white/[0.07] px-3 pt-2 pb-1.5">
+              <button
+                onClick={handlePortfolioClick}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold tracking-wide transition-colors ${
+                  portfolioMode
+                    ? 'bg-white text-[#0d0d0d]'
+                    : 'border border-white/[0.08] text-white/50 hover:border-white/20 hover:text-white/80'
+                }`}
+              >
+                <BriefcaseIcon />
+                Portfolio
+              </button>
+            </div>
+
+            {/* Portfolio panel — inline below Portfolio button */}
+            {portfolioMode && <PortfolioPanel />}
 
             {/* Data button */}
             <div className="shrink-0 border-t border-white/[0.07] px-3 pt-2 pb-1.5">

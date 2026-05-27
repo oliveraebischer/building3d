@@ -256,6 +256,14 @@ export default function MapView() {
       highlightSource()?.setData({ type: 'Feature', geometry: geom, properties: {} })
     })
 
+    // Register portfolio highlight callback — shows multiple parcel polygons simultaneously
+    useMapStore.getState().setPortfolioHighlightFn((geoms) => {
+      highlightSource()?.setData({
+        type: 'FeatureCollection',
+        features: geoms.map(g => ({ type: 'Feature' as const, geometry: g, properties: {} })),
+      })
+    })
+
     mapRef.current = map
     setMapInstance(map)
 

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useMapStore } from '../store/mapStore'
+import type { PortfolioEntry } from '../store/mapStore'
 import type { GwrFeature } from '../api/geoAdmin'
 
 function Row({ label, value }: { label: string; value: string | number | null | undefined }) {
@@ -46,8 +47,53 @@ function ChevronIcon({ open }: { open: boolean }) {
 
 export default function ParcelPanel() {
   const { parcelLoading, selectedParcel, selectedGWR, parcelError,
-          clearParcel, clearHighlight, setHighlightBuilding, mapInstance } = useMapStore()
+          clearParcel, clearHighlight, setHighlightBuilding, mapInstance,
+          portfolio, addToPortfolio, removeFromPortfolio,
+          setAnalysisMode, setSidebarCollapsed } = useMapStore()
   const [expandedEgids, setExpandedEgids] = useState<Set<string>>(new Set())
+
+  // Portfolio add state: 'idle' | 'selecting' | 'done'
+  const [portfolioState, setPortfolioState] = useState<'idle' | 'selecting' | 'done'>('idle')
+  const [checkedEgids, setCheckedEgids] = useState<Set<string>>(new Set())
+
+  // Reset portfolio UI when parcel changes
+  useEffect(() => {
+    setPortfolioState('idle')
+    setCheckedEgids(new Set())
+  }, [selectedParcel?.egrid])
+
+  // Reflect existing portfolio membership
+  useEffect(() => {
+    if (!selectedParcel) return
+    const inPortfolio = portfolio.some(e => e.parcel.egrid === selectedParcel.egrid)
+    setPortfolioState(inPortfolio ? 'done' : 'idle')
+  }, [selectedParcel?.egrid, portfolio])
+
+  const confirmAdd = (buildings: GwrFeature[]) => {
+    if (!selectedParcel) return
+    const entry: PortfolioEntry = { parcel: selectedParcel, buildings, addedAt: new Date().toISOString() }
+    addToPortfolio(entry)
+    setPortfolioState('done')
+    setCheckedEgids(new Set())
+  }
+
+  const handleAddClick = () => {
+    if (selectedGWR.length <= 1) {
+      confirmAdd(selectedGWR)
+    } else {
+      setCheckedEgids(new Set(selectedGWR.map((b, i) => b.egid !== '—' ? b.egid : String(i))))
+      setPortfolioState('selecting')
+    }
+  }
+
+  const toggleCheck = (key: string) => {
+    setCheckedEgids(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
 
   // Drag state — initial value is offscreen; snapped to SE corner on parcel load
   const [pos, setPos] = useState<{ x: number; y: number }>(() => ({
@@ -174,6 +220,96 @@ export default function ParcelPanel() {
                 <Row label="Buildings"  value={selectedGWR.length > 0 ? selectedGWR.length : null} />
               </tbody>
             </table>
+          </div>
+
+          {/* Portfolio action */}
+          <div className="px-4 py-2.5 border-b border-white/[0.06]">
+            {portfolioState === 'done' ? (
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-accent/80">✓ In Portfolio</span>
+                <button
+                  onClick={() => { removeFromPortfolio(selectedParcel.egrid); setPortfolioState('idle') }}
+                  className="text-[10px] text-white/30 hover:text-white/70 transition-colors"
+                >
+                  Remove
+                </button>
+              </div>
+            ) : portfolioState === 'selecting' ? (
+              <div>
+                <p className="text-[9px] font-bold tracking-widest uppercase text-white/30 mb-2">
+                  Select buildings
+                </p>
+                <div className="space-y-1 mb-2">
+                  {selectedGWR.map((b, i) => {
+                    const key = b.egid !== '—' ? b.egid : String(i)
+                    const label = b.address !== '—' ? b.address : `Building ${i + 1}`
+                    return (
+                      <label key={key} className="flex items-center gap-2 cursor-pointer group">
+                        <input
+                          type="checkbox"
+                          checked={checkedEgids.has(key)}
+                          onChange={() => toggleCheck(key)}
+                          className="accent-[#00E5FF] w-3 h-3"
+                        />
+                        <span className="text-[11px] text-white/60 group-hover:text-white/80 truncate transition-colors">
+                          {label}
+                        </span>
+                      </label>
+                    )
+                  })}
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => confirmAdd(selectedGWR)}
+                    className="text-[10px] text-white/40 hover:text-white/70 transition-colors"
+                  >
+                    Add all
+                  </button>
+                  <button
+                    onClick={() => {
+                      const selected = selectedGWR.filter((b, i) =>
+                        checkedEgids.has(b.egid !== '—' ? b.egid : String(i))
+                      )
+                      if (selected.length > 0) confirmAdd(selected)
+                    }}
+                    disabled={checkedEgids.size === 0}
+                    className="flex-1 px-2 py-1 rounded-md bg-accent/10 text-accent text-[10px] font-semibold
+                               hover:bg-accent/20 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Confirm
+                  </button>
+                  <button
+                    onClick={() => setPortfolioState('idle')}
+                    className="text-[10px] text-white/30 hover:text-white/60 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={handleAddClick}
+                className="w-full text-left text-[11px] text-white/40 hover:text-accent/80
+                           transition-colors flex items-center gap-1.5"
+              >
+                <svg className="w-3 h-3 shrink-0" fill="none" stroke="currentColor" strokeWidth={2}
+                  strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
+                Add to Portfolio
+              </button>
+            )}
+          </div>
+
+          {/* Analysis entry */}
+          <div className="px-4 py-3 border-b border-white/[0.06]">
+            <button
+              onClick={() => { setSidebarCollapsed(true); setAnalysisMode(true) }}
+              className="w-full py-2 rounded-lg bg-accent text-[#0d0d0d] text-[12px] font-bold
+                         tracking-wide hover:bg-accent/90 active:scale-[0.98] transition-all"
+            >
+              Analyse
+            </button>
           </div>
 
           {/* Buildings section */}
