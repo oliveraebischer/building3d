@@ -1,6 +1,7 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Optional
 
 import fiona
 from fastapi import APIRouter, HTTPException, Query
@@ -11,7 +12,7 @@ DATA_DIR = Path(__file__).parents[2] / "data" / "tiles"
 _executor = ThreadPoolExecutor(max_workers=2)
 
 
-def _sync_fetch_buildings(egid_set: frozenset, lv95_bbox: tuple) -> list:
+def _sync_fetch_buildings(egid_set: Optional[frozenset], lv95_bbox: tuple) -> list:
     to_wgs84 = Transformer.from_crs("EPSG:2056", "EPSG:4326", always_xy=True)
     features = []
     for tile_dir in DATA_DIR.iterdir():
@@ -23,7 +24,7 @@ def _sync_fetch_buildings(egid_set: frozenset, lv95_bbox: tuple) -> list:
                 with fiona.open(vsipath, layer="Building_solid") as src:
                     for f in src.filter(bbox=lv95_bbox):
                         egid = f["properties"].get("EGID")
-                        if egid not in egid_set:
+                        if egid_set is not None and egid not in egid_set:
                             continue
                         new_polys = []
                         for ring_list in f["geometry"]["coordinates"]:
@@ -54,20 +55,20 @@ def _sync_fetch_buildings(egid_set: frozenset, lv95_bbox: tuple) -> list:
 
 @router.get("")
 async def get_buildings(
-    egids: str = Query(..., description="Comma-separated EGIDs"),
     bbox: str = Query(..., description="minlng,minlat,maxlng,maxlat in WGS84"),
+    egids: Optional[str] = Query(None, description="Comma-separated EGIDs; omit to return all buildings in bbox"),
 ):
-    try:
-        egid_set = frozenset(int(e.strip()) for e in egids.split(",") if e.strip())
-    except ValueError:
-        raise HTTPException(400, "egids must be comma-separated integers")
+    egid_set: Optional[frozenset] = None
+    if egids:
+        try:
+            egid_set = frozenset(int(e.strip()) for e in egids.split(",") if e.strip())
+        except ValueError:
+            raise HTTPException(400, "egids must be comma-separated integers")
     try:
         parts = bbox.split(",")
         minlng, minlat, maxlng, maxlat = (float(x) for x in parts)
     except (ValueError, TypeError):
         raise HTTPException(400, "bbox must be 'minlng,minlat,maxlng,maxlat'")
-    if not egid_set:
-        raise HTTPException(400, "No valid egids provided")
 
     to_lv95 = Transformer.from_crs("EPSG:4326", "EPSG:2056", always_xy=True)
     minx, miny = to_lv95.transform(minlng, minlat)

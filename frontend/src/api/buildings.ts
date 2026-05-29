@@ -29,3 +29,12 @@ export async function fetchBuildings(
   if (!res.ok) throw new Error(`${res.status}`)
   return res.json()
 }
+
+export async function fetchNeighborBuildings(
+  bbox: [number, number, number, number],
+): Promise<BuildingFeatureCollection> {
+  const params = new URLSearchParams({ bbox: bbox.join(',') })
+  const res = await fetch(`/api/buildings?${params}`)
+  if (!res.ok) throw new Error(`${res.status}`)
+  return res.json()
+}

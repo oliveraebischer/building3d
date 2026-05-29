@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { useMapStore } from '../store/mapStore'
-import { fetchBuildings, type BuildingFeatureCollection } from '../api/buildings'
+import { fetchBuildings, fetchNeighborBuildings, type BuildingFeatureCollection } from '../api/buildings'
 import { fetchTerrain, type TerrainGrid } from '../api/terrain'
 
 type ViewerState =
@@ -18,6 +18,12 @@ export default function BuildingViewer3D() {
   const [state, setState] = useState<ViewerState>({ status: 'idle' })
   const canvasRef = useRef<HTMLDivElement>(null)
 
+  const [showNeighbors, setShowNeighbors] = useState(false)
+  const [neighborData, setNeighborData] = useState<BuildingFeatureCollection | null>(null)
+  const [neighborLoading, setNeighborLoading] = useState(false)
+  const neighborGroupRef = useRef<THREE.Group | null>(null)
+  const neighborMatRef   = useRef<THREE.MeshPhongMaterial | null>(null)
+
   // Fetch building geometry + terrain when parcel/buildings change
   useEffect(() => {
     if (!selectedParcel) { setState({ status: 'idle' }); return }
@@ -29,17 +35,25 @@ export default function BuildingViewer3D() {
     const coords = (selectedParcel.geometry.coordinates as [number, number][][]).flat()
     const lngs = coords.map(c => c[0])
     const lats = coords.map(c => c[1])
-    const bbox: [number, number, number, number] = [
-      Math.min(...lngs), Math.min(...lats),
-      Math.max(...lngs), Math.max(...lats),
+    const minLng = Math.min(...lngs), maxLng = Math.max(...lngs)
+    const minLat = Math.min(...lats), maxLat = Math.max(...lats)
+    const bbox: [number, number, number, number] = [minLng, minLat, maxLng, maxLat]
+
+    // Terrain fetched with extra margin beyond the neighbour bbox so all buildings
+    // sit fully on the ground plane
+    const pad = 1.5
+    const terrainBbox: [number, number, number, number] = [
+      minLng - (maxLng - minLng) * pad, minLat - (maxLat - minLat) * pad,
+      maxLng + (maxLng - minLng) * pad, maxLat + (maxLat - minLat) * pad,
     ]
 
     let cancelled = false
+    setNeighborData(null)
     setState({ status: 'loading' })
 
     Promise.all([
       fetchBuildings(egids, bbox),
-      fetchTerrain(bbox).catch(() => null),
+      fetchTerrain(terrainBbox).catch(() => null),
     ]).then(([data, terrain]) => {
       if (cancelled) return
       setState(data.features.length > 0
@@ -94,7 +108,7 @@ export default function BuildingViewer3D() {
       -(lat - cy) * 111320,
     ]
 
-    // Buildings
+    // Selected parcel buildings
     const material = new THREE.MeshPhongMaterial({
       color: 0x2a6099,
       side: THREE.DoubleSide,
@@ -119,6 +133,22 @@ export default function BuildingViewer3D() {
       group.add(new THREE.Mesh(geo, material))
     }
     scene.add(group)
+
+    // Neighbour buildings group (populated by a separate effect)
+    const neighborGroup = new THREE.Group()
+    neighborGroup.visible = showNeighbors
+    scene.add(neighborGroup)
+    neighborGroupRef.current = neighborGroup
+
+    const neighborMat = new THREE.MeshPhongMaterial({
+      color: 0x607880,
+      transparent: true,
+      opacity: 0.32,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      flatShading: true,
+    })
+    neighborMatRef.current = neighborMat
 
     // Terrain mesh
     // LV95 is metric: E-centerE→X, elev-minZ→Y, -(N-centerN)→Z
@@ -153,7 +183,7 @@ export default function BuildingViewer3D() {
       const terrainGeo = new THREE.BufferGeometry()
       terrainGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(tPositions), 3))
       terrainGeo.computeVertexNormals()
-      terrainMat = new THREE.MeshLambertMaterial({ color: 0x4a6b3a, side: THREE.FrontSide })
+      terrainMat = new THREE.MeshLambertMaterial({ color: 0x2a2a2a, side: THREE.FrontSide })
       terrainMesh = new THREE.Mesh(terrainGeo, terrainMat)
       scene.add(terrainMesh)
     }
@@ -234,8 +264,82 @@ export default function BuildingViewer3D() {
       }
       material.dispose()
       if (terrainMesh) { terrainMesh.geometry.dispose(); terrainMat?.dispose() }
+      for (const child of neighborGroup.children)
+        if (child instanceof THREE.Mesh) child.geometry.dispose()
+      neighborMat.dispose()
+      neighborGroupRef.current = null
+      neighborMatRef.current = null
     }
-  }, [state])
+  }, [state]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Populate neighbour group when data arrives (runs after main effect due to declaration order)
+  useEffect(() => {
+    const ng  = neighborGroupRef.current
+    const mat = neighborMatRef.current
+    if (!ng || !mat || state.status !== 'ready') return
+
+    for (const child of [...ng.children])
+      if (child instanceof THREE.Mesh) child.geometry.dispose()
+    ng.clear()
+
+    if (!neighborData?.features.length) return
+
+    const allLngs: number[] = [], allLats: number[] = [], allZs: number[] = []
+    for (const f of state.data.features)
+      for (const poly of f.geometry.coordinates)
+        for (const ring of poly)
+          for (const [lng, lat, z] of ring) { allLngs.push(lng); allLats.push(lat); allZs.push(z) }
+    const cx = (Math.min(...allLngs) + Math.max(...allLngs)) / 2
+    const cy = (Math.min(...allLats) + Math.max(...allLats)) / 2
+    const buildingMinZ = Math.min(...allZs)
+    const minZ = state.terrain ? Math.min(buildingMinZ, state.terrain.min_elevation) : buildingMinZ
+    const cosLat = Math.cos(cy * Math.PI / 180)
+    const toLocal = (lng: number, lat: number, z: number): [number, number, number] => [
+      (lng - cx) * cosLat * 111320, z - minZ, -(lat - cy) * 111320,
+    ]
+
+    const selectedEgids = new Set(selectedGWR.map(b => b.egid))
+    for (const feat of neighborData.features) {
+      if (selectedEgids.has(String(feat.properties.egid))) continue
+      const positions: number[] = []
+      for (const poly of feat.geometry.coordinates) {
+        const ring = poly[0]
+        for (let i = 1; i < ring.length - 2; i++)
+          positions.push(...toLocal(...ring[0]), ...toLocal(...ring[i]), ...toLocal(...ring[i + 1]))
+      }
+      if (!positions.length) continue
+      const geo = new THREE.BufferGeometry()
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3))
+      geo.computeVertexNormals()
+      ng.add(new THREE.Mesh(geo, mat))
+    }
+  }, [neighborData, state]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Toggle neighbour group visibility without rebuilding the scene
+  useEffect(() => {
+    if (neighborGroupRef.current) neighborGroupRef.current.visible = showNeighbors
+  }, [showNeighbors])
+
+  // Lazy-fetch neighbours on first toggle-ON per parcel (bbox expanded 100% in each direction)
+  useEffect(() => {
+    if (!showNeighbors || neighborData !== null || !selectedParcel) return
+    const coords = (selectedParcel.geometry.coordinates as [number, number][][]).flat()
+    const lngs = coords.map(c => c[0]), lats = coords.map(c => c[1])
+    const [minLng, maxLng] = [Math.min(...lngs), Math.max(...lngs)]
+    const [minLat, maxLat] = [Math.min(...lats), Math.max(...lats)]
+    const pad = 1.0
+    const neighborBbox: [number, number, number, number] = [
+      minLng - (maxLng - minLng) * pad, minLat - (maxLat - minLat) * pad,
+      maxLng + (maxLng - minLng) * pad, maxLat + (maxLat - minLat) * pad,
+    ]
+    let cancelled = false
+    setNeighborLoading(true)
+    fetchNeighborBuildings(neighborBbox)
+      .then(data => { if (!cancelled) setNeighborData(data) })
+      .catch(() => { if (!cancelled) setNeighborData({ type: 'FeatureCollection', features: [] }) })
+      .finally(() => { if (!cancelled) setNeighborLoading(false) })
+    return () => { cancelled = true }
+  }, [showNeighbors, selectedParcel?.egrid]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="w-full h-full relative bg-[#080808]">
@@ -276,6 +380,39 @@ export default function BuildingViewer3D() {
       {state.status === 'idle' && (
         <div className="absolute inset-0 flex items-center justify-center px-8 pointer-events-none">
           <p className="text-[12px] text-white/15 text-center">Select a parcel to view 3D geometry.</p>
+        </div>
+      )}
+
+      {/* View toolbar — extensible: add more toggle rows inside the panel body */}
+      {state.status === 'ready' && (
+        <div className="absolute bottom-4 left-4 z-10">
+          <div className="bg-black/60 backdrop-blur-sm rounded-md border border-white/[0.08] min-w-[172px]">
+            <div className="px-3 pt-2 pb-1">
+              <span className="text-[9px] text-white/20 font-medium tracking-widest uppercase">View</span>
+            </div>
+            <div className="px-3 pb-2 space-y-2">
+              <label className="flex items-center gap-2.5 cursor-pointer group">
+                <button
+                  role="switch"
+                  aria-checked={showNeighbors}
+                  onClick={() => setShowNeighbors(v => !v)}
+                  className={`relative w-7 h-[14px] rounded-full transition-colors shrink-0 ${
+                    showNeighbors ? 'bg-accent' : 'bg-white/15 group-hover:bg-white/20'
+                  }`}
+                >
+                  <span className={`absolute top-[2px] w-[10px] h-[10px] rounded-full bg-white shadow transition-all ${
+                    showNeighbors ? 'left-[14px]' : 'left-[2px]'
+                  }`} />
+                </button>
+                <span className="text-[11px] text-white/40 group-hover:text-white/60 transition-colors select-none leading-none">
+                  Neighbouring buildings
+                </span>
+                {neighborLoading && (
+                  <span className="w-2.5 h-2.5 rounded-full border border-white/[0.2] border-t-white/50 animate-spin shrink-0" />
+                )}
+              </label>
+            </div>
+          </div>
         </div>
       )}
     </div>

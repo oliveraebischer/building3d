@@ -36,15 +36,8 @@ async def get_terrain(
         raise HTTPException(400, "bbox must be 'minlng,minlat,maxlng,maxlat'")
 
     to_lv95 = Transformer.from_crs("EPSG:4326", "EPSG:2056", always_xy=True)
-    minE, minN = to_lv95.transform(minlng, minlat)
-    maxE, maxN = to_lv95.transform(maxlng, maxlat)
-
-    pad_e = (maxE - minE) * 0.5
-    pad_n = (maxN - minN) * 0.5
-    exp_minE = minE - pad_e
-    exp_maxE = maxE + pad_e
-    exp_minN = minN - pad_n
-    exp_maxN = maxN + pad_n
+    exp_minE, exp_minN = to_lv95.transform(minlng, minlat)
+    exp_maxE, exp_maxN = to_lv95.transform(maxlng, maxlat)
 
     E_vals = [exp_minE + col * (exp_maxE - exp_minE) / (grid - 1) for col in range(grid)]
     N_vals = [exp_minN + row * (exp_maxN - exp_minN) / (grid - 1) for row in range(grid)]
