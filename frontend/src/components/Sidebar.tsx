@@ -311,7 +311,7 @@ export default function Sidebar() {
       >
         {sidebarCollapsed ? (
           // ── Collapsed: icon strip ─────────────────────────────────────────
-          <div className="flex flex-col items-center pt-2 gap-0.5">
+          <div className="flex flex-col items-center h-full pt-2 gap-0.5">
             <button
               onClick={handleToggleCollapse}
               className="w-9 h-9 flex items-center justify-center rounded-lg text-white/35 hover:text-white hover:bg-white/[0.06] transition-colors"
@@ -332,6 +332,8 @@ export default function Sidebar() {
             >
               <SearchIcon />
             </button>
+
+            <div className="flex-1" />
 
             <button
               onClick={handlePortfolioClick}
