@@ -7,7 +7,24 @@ import { fetchTerrain, type TerrainGrid } from '../api/terrain'
 import { findBuildingByEGID } from '../api/geoAdmin'
 
 const fmtLV95 = (n: number) =>
-  n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '’') // Swiss apostrophe: 2'660'123
+  n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '\u2019') // Swiss apostrophe: 2'660'123
+
+function loadImage(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.onload = () => resolve(img)
+    img.onerror = reject
+    img.src = url
+  })
+}
+
+function wgs84ToMercator(lon: number, lat: number): [number, number] {
+  return [
+    lon * 20037508.34 / 180,
+    Math.log(Math.tan((90 + lat) * Math.PI / 360)) / (Math.PI / 180) * 20037508.34 / 180,
+  ]
+}
 
 type ViewerState =
   | { status: 'idle' }
@@ -34,6 +51,11 @@ export default function BuildingViewer3D() {
   const fetchingRef = useRef(new Set<number>())
 
   const [showNeighbors, setShowNeighbors] = useState(false)
+  const [showMapLayer, setShowMapLayer] = useState(true)
+  const showMapLayerRef = useRef(true)
+  showMapLayerRef.current = showMapLayer
+  const terrainMatRef   = useRef<THREE.MeshLambertMaterial | null>(null)
+  const compositeTexRef = useRef<THREE.CanvasTexture | null>(null)
   const [cursorInfo, setCursorInfo] = useState<{ e: number; n: number; elevation: number } | null>(null)
   const [hoveredInfo, setHoveredInfo] = useState<{
     egid: number
@@ -217,6 +239,7 @@ export default function BuildingViewer3D() {
       }
 
       const tPositions: number[] = []
+      const tUVs: number[] = []
       for (let row = 0; row < N - 1; row++) {
         for (let col = 0; col < N - 1; col++) {
           const v00 = vertAt(col,     row)
@@ -224,15 +247,72 @@ export default function BuildingViewer3D() {
           const v01 = vertAt(col,     row + 1)
           const v11 = vertAt(col + 1, row + 1)
           tPositions.push(...v00, ...v10, ...v01, ...v10, ...v11, ...v01)
+          const u0 = col / (N - 1), u1 = (col + 1) / (N - 1)
+          const r0 = row / (N - 1), r1 = (row + 1) / (N - 1)
+          tUVs.push(u0,r0, u1,r0, u0,r1,  u1,r0, u1,r1, u0,r1)
         }
       }
 
       const terrainGeo = new THREE.BufferGeometry()
       terrainGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(tPositions), 3))
+      terrainGeo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(tUVs), 2))
       terrainGeo.computeVertexNormals()
       terrainMat = new THREE.MeshLambertMaterial({ color: 0x2a2a2a, side: THREE.FrontSide })
       terrainMesh = new THREE.Mesh(terrainGeo, terrainMat)
       scene.add(terrainMesh)
+
+      terrainMatRef.current = terrainMat
+      let loadCancelled = false
+
+      const loadMapTexture = async () => {
+        try {
+          const parcelCoords = (selectedParcel!.geometry.coordinates as [number, number][][]).flat()
+          const plngs = parcelCoords.map(c => c[0]), plats = parcelCoords.map(c => c[1])
+          const [pMinLng, pMaxLng] = [Math.min(...plngs), Math.max(...plngs)]
+          const [pMinLat, pMaxLat] = [Math.min(...plats), Math.max(...plats)]
+          const tpad = 1.5
+          const minLng = pMinLng - (pMaxLng - pMinLng) * tpad
+          const maxLng = pMaxLng + (pMaxLng - pMinLng) * tpad
+          const minLat = pMinLat - (pMaxLat - pMinLat) * tpad
+          const maxLat = pMaxLat + (pMaxLat - pMinLat) * tpad
+
+          const [minX, minY] = wgs84ToMercator(minLng, minLat)
+          const [maxX, maxY] = wgs84ToMercator(maxLng, maxLat)
+          const bbox = `${minX},${minY},${maxX},${maxY}`
+          const imgH = 512
+          const imgW = Math.round(imgH * (maxX - minX) / (maxY - minY))
+
+          const wmsBase = 'https://wms.geo.admin.ch/?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap'
+          const common  = `&CRS=EPSG:3857&WIDTH=${imgW}&HEIGHT=${imgH}&BBOX=${bbox}&STYLES=`
+          const swissUrl = `${wmsBase}&LAYERS=ch.swisstopo.swissimage-product&FORMAT=image/jpeg&TRANSPARENT=false${common}`
+          const cadUrl   = `${wmsBase}&LAYERS=ch.kantone.cadastralwebmap-farbe&FORMAT=image/png&TRANSPARENT=true${common}`
+
+          const [swissImg, cadImg] = await Promise.all([loadImage(swissUrl), loadImage(cadUrl)])
+          if (loadCancelled) return
+
+          const canvas = document.createElement('canvas')
+          canvas.width = imgW; canvas.height = imgH
+          const ctx = canvas.getContext('2d')!
+          ctx.drawImage(swissImg, 0, 0)
+          ctx.globalAlpha = 0.5
+          ctx.drawImage(cadImg, 0, 0)
+
+          if (loadCancelled) return
+          const tex = new THREE.CanvasTexture(canvas)
+          compositeTexRef.current = tex
+          const mat = terrainMatRef.current
+          if (mat && showMapLayerRef.current) {
+            mat.map = tex
+            mat.color.set(0xffffff)
+            mat.needsUpdate = true
+          }
+        } catch { /* keep gray on error */ }
+      }
+      loadMapTexture()
+
+      // Captured for cleanup
+      ;(terrainMesh as THREE.Mesh & { _cancelLoad?: () => void })._cancelLoad =
+        () => { loadCancelled = true }
     }
 
     // Camera framing — center on buildings; maxDim from full scene (includes terrain)
@@ -412,7 +492,14 @@ export default function BuildingViewer3D() {
       }
       material.dispose()
       highlightMat.dispose()
-      if (terrainMesh) { terrainMesh.geometry.dispose(); terrainMat?.dispose() }
+      if (terrainMesh) {
+        ;(terrainMesh as THREE.Mesh & { _cancelLoad?: () => void })._cancelLoad?.()
+        terrainMesh.geometry.dispose()
+        terrainMat?.dispose()
+      }
+      compositeTexRef.current?.dispose()
+      compositeTexRef.current = null
+      terrainMatRef.current = null
       for (const child of neighborGroup.children)
         if (child instanceof THREE.Mesh) child.geometry.dispose()
       neighborMat.dispose()
@@ -471,6 +558,15 @@ export default function BuildingViewer3D() {
   useEffect(() => {
     if (neighborGroupRef.current) neighborGroupRef.current.visible = showNeighbors
   }, [showNeighbors])
+
+  // Toggle aerial+cadastral texture without rebuilding the scene
+  useEffect(() => {
+    const mat = terrainMatRef.current
+    if (!mat) return
+    mat.map = showMapLayer ? (compositeTexRef.current ?? null) : null
+    mat.color.set(showMapLayer && compositeTexRef.current ? 0xffffff : 0x2a2a2a)
+    mat.needsUpdate = true
+  }, [showMapLayer])
 
   // Lazy-fetch neighbours on first toggle-ON per parcel (bbox expanded 100% in each direction)
   useEffect(() => {
@@ -611,6 +707,23 @@ export default function BuildingViewer3D() {
                 {neighborLoading && (
                   <span className="w-2.5 h-2.5 rounded-full border border-white/[0.2] border-t-white/50 animate-spin shrink-0" />
                 )}
+              </label>
+              <label className="flex items-center gap-2.5 cursor-pointer group">
+                <button
+                  role="switch"
+                  aria-checked={showMapLayer}
+                  onClick={() => setShowMapLayer(v => !v)}
+                  className={`relative w-7 h-[14px] rounded-full transition-colors shrink-0 ${
+                    showMapLayer ? 'bg-accent' : 'bg-white/15 group-hover:bg-white/20'
+                  }`}
+                >
+                  <span className={`absolute top-[2px] w-[10px] h-[10px] rounded-full bg-white shadow transition-all ${
+                    showMapLayer ? 'left-[14px]' : 'left-[2px]'
+                  }`} />
+                </button>
+                <span className="text-[11px] text-white/40 group-hover:text-white/60 transition-colors select-none leading-none">
+                  Aerial + cadastral
+                </span>
               </label>
             </div>
           </div>
