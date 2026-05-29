@@ -76,7 +76,7 @@ export default function BuildingViewer3D() {
 
     Promise.all([
       fetchBuildings(egids, bbox),
-      fetchTerrain(terrainBbox).catch(() => null),
+      fetchTerrain(terrainBbox, 32).catch(() => null),
     ]).then(([data, terrain]) => {
       if (cancelled) return
       setState(data.features.length > 0

@@ -28,7 +28,7 @@ async def _fetch_height(client: httpx.AsyncClient, sem: asyncio.Semaphore,
 @router.get("")
 async def get_terrain(
     bbox: str = Query(..., description="minlng,minlat,maxlng,maxlat in WGS84"),
-    grid: int = Query(16, ge=4, le=32),
+    grid: int = Query(32, ge=4, le=64),
 ):
     try:
         minlng, minlat, maxlng, maxlat = (float(x) for x in bbox.split(","))
@@ -42,7 +42,7 @@ async def get_terrain(
     E_vals = [exp_minE + col * (exp_maxE - exp_minE) / (grid - 1) for col in range(grid)]
     N_vals = [exp_minN + row * (exp_maxN - exp_minN) / (grid - 1) for row in range(grid)]
 
-    sem = asyncio.Semaphore(50)
+    sem = asyncio.Semaphore(100)
     async with httpx.AsyncClient(timeout=30) as client:
         tasks = [
             _fetch_height(client, sem, E, N)
