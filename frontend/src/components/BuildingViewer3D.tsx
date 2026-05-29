@@ -6,6 +6,9 @@ import { fetchBuildings, fetchNeighborBuildings, type BuildingFeatureCollection 
 import { fetchTerrain, type TerrainGrid } from '../api/terrain'
 import { findBuildingByEGID } from '../api/geoAdmin'
 
+const fmtLV95 = (n: number) =>
+  n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '’') // Swiss apostrophe: 2'660'123
+
 type ViewerState =
   | { status: 'idle' }
   | { status: 'no-tile' }
@@ -18,6 +21,7 @@ export default function BuildingViewer3D() {
   const { selectedParcel, selectedGWR, downloadedTileIds } = useMapStore()
   const [state, setState] = useState<ViewerState>({ status: 'idle' })
   const canvasRef = useRef<HTMLDivElement>(null)
+  const compassRef = useRef<HTMLDivElement>(null)
 
   // Refs so mousemove handler always reads current store values without stale closures
   const selectedGWRRef = useRef(selectedGWR)
@@ -30,6 +34,7 @@ export default function BuildingViewer3D() {
   const fetchingRef = useRef(new Set<number>())
 
   const [showNeighbors, setShowNeighbors] = useState(false)
+  const [cursorInfo, setCursorInfo] = useState<{ e: number; n: number; elevation: number } | null>(null)
   const [hoveredInfo, setHoveredInfo] = useState<{
     egid: number
     address?: string
@@ -153,7 +158,7 @@ export default function BuildingViewer3D() {
       geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3))
       geo.computeVertexNormals()
       const mesh = new THREE.Mesh(geo, material)
-      mesh.userData = { egid: feat.properties.egid }
+      mesh.userData = { egid: feat.properties.egid, isNeighbor: false }
       group.add(mesh)
     }
     scene.add(group)
@@ -174,16 +179,34 @@ export default function BuildingViewer3D() {
     })
     neighborMatRef.current = neighborMat
 
+    const highlightMat = new THREE.MeshPhongMaterial({
+      color: 0x3a80c0,
+      emissive: 0x0a1a2a,
+      side: THREE.DoubleSide,
+      flatShading: true,
+    })
+    const neighborHighlightMat = new THREE.MeshPhongMaterial({
+      color: 0x80a0ac,
+      transparent: true,
+      opacity: 0.55,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      flatShading: true,
+    })
+
     // Terrain mesh
     // LV95 is metric: E-centerE→X, elev-minZ→Y, -(N-centerN)→Z
     let terrainMesh: THREE.Mesh | null = null
     let terrainMat: THREE.MeshLambertMaterial | null = null
+    let terrainCenterE = 0, terrainCenterN = 0
 
     if (state.terrain) {
       const N = state.terrain.grid_size
       const [exp_minE, exp_minN, exp_maxE, exp_maxN] = state.terrain.bbox_lv95
       const centerE = (exp_minE + exp_maxE) / 2
       const centerN = (exp_minN + exp_maxN) / 2
+      terrainCenterE = centerE
+      terrainCenterN = centerN
       const fallbackElev = state.terrain.min_elevation
 
       const vertAt = (col: number, row: number): [number, number, number] => {
@@ -268,31 +291,51 @@ export default function BuildingViewer3D() {
     })
     ro.observe(container)
 
+    const northVec = new THREE.Vector3()
     let animId: number
     const animate = () => {
       animId = requestAnimationFrame(animate)
       controls.update()
       renderer.render(scene, camera)
+      if (compassRef.current) {
+        northVec.set(0, 0, -1).transformDirection(camera.matrixWorldInverse)
+        const angle = Math.atan2(northVec.x, northVec.y) * (180 / Math.PI)
+        compassRef.current.style.transform = `rotate(${angle}deg)`
+      }
     }
     animate()
 
     const raycaster = new THREE.Raycaster()
     const mouse = new THREE.Vector2()
     let isDragging = false
+    let hoveredMesh: THREE.Mesh | null = null
 
-    const onMouseDown = () => { isDragging = true; setHoveredInfo(null) }
+    const restoreHighlight = () => {
+      if (hoveredMesh) {
+        hoveredMesh.material = hoveredMesh.userData.isNeighbor ? neighborMat : material
+        hoveredMesh = null
+      }
+    }
+    const applyHighlight = (mesh: THREE.Mesh) => {
+      mesh.material = mesh.userData.isNeighbor ? neighborHighlightMat : highlightMat
+      hoveredMesh = mesh
+    }
+
+    const onMouseDown = () => { isDragging = true; restoreHighlight(); setHoveredInfo(null) }
     const onDocMouseUp = () => { isDragging = false }
     const onMouseMove = (e: MouseEvent) => {
-      if (isDragging) return
       const rect = container.getBoundingClientRect()
       mouse.x = ((e.clientX - rect.left) / rect.width)  * 2 - 1
       mouse.y = -((e.clientY - rect.top)  / rect.height) * 2 + 1
       raycaster.setFromCamera(mouse, camera)
+      if (!isDragging) {
       const targets = [
         ...group.children,
         ...(neighborGroupRef.current?.visible ? neighborGroupRef.current.children : []),
       ]
       const hit = raycaster.intersectObjects(targets, false)[0]
+      const hitMesh = hit ? (hit.object as THREE.Mesh) : null
+      if (hitMesh !== hoveredMesh) { restoreHighlight(); if (hitMesh) applyHighlight(hitMesh) }
       if (hit) {
         const egid: number = (hit.object as THREE.Mesh).userData.egid
         const gwr = selectedGWRRef.current.find(b => Number(b.egid) === egid)
@@ -328,8 +371,22 @@ export default function BuildingViewer3D() {
       } else {
         setHoveredInfo(null)
       }
+      } // end !isDragging
+      // Always update terrain coordinates regardless of building hover or drag
+      if (terrainMesh) {
+        const tHit = raycaster.intersectObject(terrainMesh, false)[0]
+        if (tHit) {
+          setCursorInfo({
+            e:         Math.round(tHit.point.x + terrainCenterE),
+            n:         Math.round(terrainCenterN - tHit.point.z),
+            elevation: Math.round((tHit.point.y + minZ) * 10) / 10,
+          })
+        } else {
+          setCursorInfo(null)
+        }
+      }
     }
-    const onMouseLeave = () => setHoveredInfo(null)
+    const onMouseLeave = () => { restoreHighlight(); setHoveredInfo(null); setCursorInfo(null) }
 
     container.addEventListener('mousedown',  onMouseDown)
     container.addEventListener('mousemove',  onMouseMove)
@@ -342,7 +399,9 @@ export default function BuildingViewer3D() {
       container.removeEventListener('mousemove',  onMouseMove)
       container.removeEventListener('mouseleave', onMouseLeave)
       document.removeEventListener('mouseup', onDocMouseUp)
+      restoreHighlight()
       setHoveredInfo(null)
+      setCursorInfo(null)
       ro.disconnect()
       controls.removeEventListener('change', onControlsChange)
       controls.dispose()
@@ -352,10 +411,12 @@ export default function BuildingViewer3D() {
         if (child instanceof THREE.Mesh) child.geometry.dispose()
       }
       material.dispose()
+      highlightMat.dispose()
       if (terrainMesh) { terrainMesh.geometry.dispose(); terrainMat?.dispose() }
       for (const child of neighborGroup.children)
         if (child instanceof THREE.Mesh) child.geometry.dispose()
       neighborMat.dispose()
+      neighborHighlightMat.dispose()
       neighborGroupRef.current = null
       neighborMatRef.current = null
     }
@@ -401,7 +462,7 @@ export default function BuildingViewer3D() {
       geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3))
       geo.computeVertexNormals()
       const mesh = new THREE.Mesh(geo, mat)
-      mesh.userData = { egid: feat.properties.egid }
+      mesh.userData = { egid: feat.properties.egid, isNeighbor: true }
       ng.add(mesh)
     }
   }, [neighborData, state]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -488,6 +549,38 @@ export default function BuildingViewer3D() {
               {hoveredInfo.egrid && <> · EGRID {hoveredInfo.egrid}</>}
             </p>
           </div>
+        </div>
+      )}
+
+      {/* Compass + coordinate readout — lower-right corner */}
+      {state.status === 'ready' && (
+        <div className="absolute bottom-4 right-4 z-10 pointer-events-none select-none flex flex-col items-end gap-2">
+          <div ref={compassRef} className="w-20 h-20">
+            <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full h-full">
+              <circle cx="20" cy="20" r="19" fill="rgba(0,0,0,0.62)" stroke="rgba(255,255,255,0.1)" strokeWidth="1"/>
+              {/* Cardinal dots E / S / W */}
+              <circle cx="37" cy="20" r="1.1" fill="rgba(255,255,255,0.2)"/>
+              <circle cx="20" cy="37" r="1.1" fill="rgba(255,255,255,0.2)"/>
+              <circle cx="3"  cy="20" r="1.1" fill="rgba(255,255,255,0.2)"/>
+              {/* North needle (red) */}
+              <path d="M20 7 L17 20 L23 20 Z" fill="rgba(210,55,55,0.9)"/>
+              {/* South needle (dim) */}
+              <path d="M20 33 L17 20 L23 20 Z" fill="rgba(255,255,255,0.18)"/>
+              {/* Center cap */}
+              <circle cx="20" cy="20" r="2.5" fill="rgba(255,255,255,0.5)"/>
+              {/* N label */}
+              <text x="20" y="6" textAnchor="middle" fontSize="5" fontWeight="700"
+                    fill="rgba(210,55,55,0.9)" fontFamily="system-ui, sans-serif">N</text>
+            </svg>
+          </div>
+
+          {cursorInfo && (
+            <div className="bg-black/60 backdrop-blur-sm rounded border border-white/[0.08] px-2.5 py-1.5 space-y-px">
+              <p className="text-[10px] text-white/45 font-mono leading-tight">E {fmtLV95(cursorInfo.e)}</p>
+              <p className="text-[10px] text-white/45 font-mono leading-tight">N {fmtLV95(cursorInfo.n)}</p>
+              <p className="text-[10px] text-white/28 font-mono leading-tight">{cursorInfo.elevation.toFixed(1)} m ü.M.</p>
+            </div>
+          )}
         </div>
       )}
 
