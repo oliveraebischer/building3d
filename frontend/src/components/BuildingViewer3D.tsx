@@ -26,6 +26,15 @@ function wgs84ToMercator(lon: number, lat: number): [number, number] {
   ]
 }
 
+// swisstopo approximation formulas — accuracy < 1 m across Switzerland
+function lv95ToWgs84(E: number, N: number): [number, number] {
+  const e = (E - 2600000) / 1000000
+  const n = (N - 1200000) / 1000000
+  const lon = 2.6779094 + 4.728982*e + 0.791484*e*n + 0.1306*e*n*n - 0.0436*e*e*e
+  const lat = 16.9023892 + 3.238272*n - 0.270978*e*e - 0.002528*n*n - 0.0447*e*e*n - 0.0140*n*n*n
+  return [lon * 100/36, lat * 100/36]
+}
+
 type ViewerState =
   | { status: 'idle' }
   | { status: 'no-tile' }
@@ -35,7 +44,10 @@ type ViewerState =
   | { status: 'ready'; data: BuildingFeatureCollection; terrain: TerrainGrid | null }
 
 export default function BuildingViewer3D() {
-  const { selectedParcel, selectedGWR, downloadedTileIds } = useMapStore()
+  const {
+    selectedParcel, selectedGWR, downloadedTileIds,
+    analysisSelectedEgid, analysisHoveredEgid,
+  } = useMapStore()
   const [state, setState] = useState<ViewerState>({ status: 'idle' })
   const canvasRef = useRef<HTMLDivElement>(null)
   const compassRef = useRef<HTMLDivElement>(null)
@@ -56,6 +68,7 @@ export default function BuildingViewer3D() {
   showMapLayerRef.current = showMapLayer
   const terrainMatRef   = useRef<THREE.MeshLambertMaterial | null>(null)
   const compositeTexRef = useRef<THREE.CanvasTexture | null>(null)
+  const sceneCenterRef  = useRef<{ lon: number; lat: number } | null>(null)
   const [cursorInfo, setCursorInfo] = useState<{ e: number; n: number; elevation: number } | null>(null)
   const [hoveredInfo, setHoveredInfo] = useState<{
     egid: number
@@ -68,6 +81,16 @@ export default function BuildingViewer3D() {
   const [neighborLoading, setNeighborLoading] = useState(false)
   const neighborGroupRef = useRef<THREE.Group | null>(null)
   const neighborMatRef   = useRef<THREE.MeshPhongMaterial | null>(null)
+
+  // Refs for panel ↔ 3D viewer building highlight
+  const meshByEgidRef           = useRef<Map<number, THREE.Mesh>>(new Map())
+  const defaultMatRef           = useRef<THREE.MeshPhongMaterial | null>(null)
+  const highlightMatRef         = useRef<THREE.MeshPhongMaterial | null>(null)
+  const panelSelectMatRef       = useRef<THREE.MeshPhongMaterial | null>(null)
+  const analysisSelectedEgidRef = useRef<number | null>(null)
+  analysisSelectedEgidRef.current = analysisSelectedEgid
+  const analysisHoveredEgidRef  = useRef<number | null>(null)
+  analysisHoveredEgidRef.current  = analysisHoveredEgid
 
   // Fetch building geometry + terrain when parcel/buildings change
   useEffect(() => {
@@ -143,26 +166,40 @@ export default function BuildingViewer3D() {
             allLngs.push(lng); allLats.push(lat); allZs.push(z)
           }
     }
-    const cx = (Math.min(...allLngs) + Math.max(...allLngs)) / 2
-    const cy = (Math.min(...allLats) + Math.max(...allLats)) / 2
     const buildingMinZ = Math.min(...allZs)
     // Terrain is at or below buildings; use terrain min as scene floor
     const minZ = state.terrain
       ? Math.min(buildingMinZ, state.terrain.min_elevation)
       : buildingMinZ
-    const cosLat = Math.cos(cy * Math.PI / 180)
+
+    // Use terrain geographic center as the shared scene origin so that
+    // buildings, terrain mesh, and map texture all share one coordinate system.
+    // Falls back to building WGS84 centroid when no terrain is available.
+    const terrainCenterLv95 = state.terrain
+      ? [(state.terrain.bbox_lv95[0] + state.terrain.bbox_lv95[2]) / 2,
+         (state.terrain.bbox_lv95[1] + state.terrain.bbox_lv95[3]) / 2] as [number, number]
+      : null
+    const cx = (Math.min(...allLngs) + Math.max(...allLngs)) / 2
+    const cy = (Math.min(...allLats) + Math.max(...allLats)) / 2
+    const [originLon, originLat] = terrainCenterLv95
+      ? lv95ToWgs84(...terrainCenterLv95)
+      : [cx, cy]
+    sceneCenterRef.current = { lon: originLon, lat: originLat }
+    const cosLat = Math.cos(originLat * Math.PI / 180)
     const toLocal = (lng: number, lat: number, z: number): [number, number, number] => [
-      (lng - cx) * cosLat * 111320,
+      (lng - originLon) * cosLat * 111320,
       z - minZ,
-      -(lat - cy) * 111320,
+      -(lat - originLat) * 111320,
     ]
 
     // Selected parcel buildings
+    meshByEgidRef.current.clear()
     const material = new THREE.MeshPhongMaterial({
       color: 0x2a6099,
       side: THREE.DoubleSide,
       flatShading: true,
     })
+    defaultMatRef.current = material
     const group = new THREE.Group()
     for (const feat of state.data.features) {
       const positions: number[] = []
@@ -181,6 +218,7 @@ export default function BuildingViewer3D() {
       geo.computeVertexNormals()
       const mesh = new THREE.Mesh(geo, material)
       mesh.userData = { egid: feat.properties.egid, isNeighbor: false }
+      meshByEgidRef.current.set(feat.properties.egid, mesh)
       group.add(mesh)
     }
     scene.add(group)
@@ -207,6 +245,7 @@ export default function BuildingViewer3D() {
       side: THREE.DoubleSide,
       flatShading: true,
     })
+    highlightMatRef.current = highlightMat
     const neighborHighlightMat = new THREE.MeshPhongMaterial({
       color: 0x80a0ac,
       transparent: true,
@@ -215,6 +254,13 @@ export default function BuildingViewer3D() {
       side: THREE.DoubleSide,
       flatShading: true,
     })
+    const panelSelectMat = new THREE.MeshPhongMaterial({
+      color: 0x80c8ff,
+      emissive: 0x1a3060,
+      side: THREE.DoubleSide,
+      flatShading: true,
+    })
+    panelSelectMatRef.current = panelSelectMat
 
     // Terrain mesh
     // LV95 is metric: E-centerE→X, elev-minZ→Y, -(N-centerN)→Z
@@ -279,7 +325,7 @@ export default function BuildingViewer3D() {
           const [minX, minY] = wgs84ToMercator(minLng, minLat)
           const [maxX, maxY] = wgs84ToMercator(maxLng, maxLat)
           const bbox = `${minX},${minY},${maxX},${maxY}`
-          const imgH = 512
+          const imgH = 2048
           const imgW = Math.round(imgH * (maxX - minX) / (maxY - minY))
 
           const wmsBase = 'https://wms.geo.admin.ch/?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap'
@@ -391,12 +437,24 @@ export default function BuildingViewer3D() {
     let hoveredMesh: THREE.Mesh | null = null
 
     const restoreHighlight = () => {
-      if (hoveredMesh) {
-        hoveredMesh.material = hoveredMesh.userData.isNeighbor ? neighborMat : material
-        hoveredMesh = null
+      if (!hoveredMesh) return
+      const egid = hoveredMesh.userData.egid as number
+      const isNeighbor = hoveredMesh.userData.isNeighbor as boolean
+      if (egid === analysisSelectedEgidRef.current) {
+        // panel-selected: material was not changed by mouse hover, just clear tracker
+      } else if (egid === analysisHoveredEgidRef.current) {
+        // panel-hovered: keep panel hover material, just clear tracker
+      } else {
+        hoveredMesh.material = isNeighbor ? neighborMat : material
       }
+      hoveredMesh = null
     }
     const applyHighlight = (mesh: THREE.Mesh) => {
+      if (mesh.userData.egid === analysisSelectedEgidRef.current) {
+        // already at strongest highlight; don't dim it, but track for leave
+        hoveredMesh = mesh
+        return
+      }
       mesh.material = mesh.userData.isNeighbor ? neighborHighlightMat : highlightMat
       hoveredMesh = mesh
     }
@@ -492,6 +550,11 @@ export default function BuildingViewer3D() {
       }
       material.dispose()
       highlightMat.dispose()
+      panelSelectMat.dispose()
+      meshByEgidRef.current.clear()
+      defaultMatRef.current = null
+      highlightMatRef.current = null
+      panelSelectMatRef.current = null
       if (terrainMesh) {
         ;(terrainMesh as THREE.Mesh & { _cancelLoad?: () => void })._cancelLoad?.()
         terrainMesh.geometry.dispose()
@@ -500,6 +563,7 @@ export default function BuildingViewer3D() {
       compositeTexRef.current?.dispose()
       compositeTexRef.current = null
       terrainMatRef.current = null
+      sceneCenterRef.current = null
       for (const child of neighborGroup.children)
         if (child instanceof THREE.Mesh) child.geometry.dispose()
       neighborMat.dispose()
@@ -521,18 +585,18 @@ export default function BuildingViewer3D() {
 
     if (!neighborData?.features.length) return
 
-    const allLngs: number[] = [], allLats: number[] = [], allZs: number[] = []
+    const center = sceneCenterRef.current
+    if (!center) return
+    const allZs: number[] = []
     for (const f of state.data.features)
       for (const poly of f.geometry.coordinates)
         for (const ring of poly)
-          for (const [lng, lat, z] of ring) { allLngs.push(lng); allLats.push(lat); allZs.push(z) }
-    const cx = (Math.min(...allLngs) + Math.max(...allLngs)) / 2
-    const cy = (Math.min(...allLats) + Math.max(...allLats)) / 2
+          for (const [,, z] of ring) allZs.push(z)
     const buildingMinZ = Math.min(...allZs)
     const minZ = state.terrain ? Math.min(buildingMinZ, state.terrain.min_elevation) : buildingMinZ
-    const cosLat = Math.cos(cy * Math.PI / 180)
+    const cosLat = Math.cos(center.lat * Math.PI / 180)
     const toLocal = (lng: number, lat: number, z: number): [number, number, number] => [
-      (lng - cx) * cosLat * 111320, z - minZ, -(lat - cy) * 111320,
+      (lng - center.lon) * cosLat * 111320, z - minZ, -(lat - center.lat) * 111320,
     ]
 
     const selectedEgids = new Set(selectedGWR.map(b => b.egid))
@@ -567,6 +631,24 @@ export default function BuildingViewer3D() {
     mat.color.set(showMapLayer && compositeTexRef.current ? 0xffffff : 0x2a2a2a)
     mat.needsUpdate = true
   }, [showMapLayer])
+
+  // Apply panel building highlights whenever selected/hovered egid changes
+  useEffect(() => {
+    if (state.status !== 'ready') return
+    const meshMap = meshByEgidRef.current
+    if (!meshMap.size) return
+    const selEgid = analysisSelectedEgid
+    const hovEgid = analysisHoveredEgid
+    meshMap.forEach((mesh, egid) => {
+      if (egid === selEgid && panelSelectMatRef.current) {
+        mesh.material = panelSelectMatRef.current
+      } else if (egid === hovEgid && highlightMatRef.current) {
+        mesh.material = highlightMatRef.current
+      } else if (defaultMatRef.current) {
+        mesh.material = defaultMatRef.current
+      }
+    })
+  }, [analysisSelectedEgid, analysisHoveredEgid, state.status]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Lazy-fetch neighbours on first toggle-ON per parcel (bbox expanded 100% in each direction)
   useEffect(() => {
