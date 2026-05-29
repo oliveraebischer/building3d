@@ -4,6 +4,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { useMapStore } from '../store/mapStore'
 import { fetchBuildings, fetchNeighborBuildings, type BuildingFeatureCollection } from '../api/buildings'
 import { fetchTerrain, type TerrainGrid } from '../api/terrain'
+import { findBuildingByEGID } from '../api/geoAdmin'
 
 type ViewerState =
   | { status: 'idle' }
@@ -18,7 +19,24 @@ export default function BuildingViewer3D() {
   const [state, setState] = useState<ViewerState>({ status: 'idle' })
   const canvasRef = useRef<HTMLDivElement>(null)
 
+  // Refs so mousemove handler always reads current store values without stale closures
+  const selectedGWRRef = useRef(selectedGWR)
+  selectedGWRRef.current = selectedGWR
+  const selectedParcelRef = useRef(selectedParcel)
+  selectedParcelRef.current = selectedParcel
+
+  // Per-session cache for neighbour building lookups (cleared on parcel change)
+  const neighborCacheRef = useRef<Map<number, { address: string | null; egrid: string | null } | null>>(new Map())
+  const fetchingRef = useRef(new Set<number>())
+
   const [showNeighbors, setShowNeighbors] = useState(false)
+  const [hoveredInfo, setHoveredInfo] = useState<{
+    egid: number
+    address?: string
+    egrid?: string
+    x: number
+    y: number
+  } | null>(null)
   const [neighborData, setNeighborData] = useState<BuildingFeatureCollection | null>(null)
   const [neighborLoading, setNeighborLoading] = useState(false)
   const neighborGroupRef = useRef<THREE.Group | null>(null)
@@ -61,7 +79,11 @@ export default function BuildingViewer3D() {
         : { status: 'empty' })
     }).catch(() => { if (!cancelled) setState({ status: 'error' }) })
 
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      neighborCacheRef.current.clear()
+      fetchingRef.current.clear()
+    }
   }, [selectedParcel?.egrid, selectedGWR, downloadedTileIds.size]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Three.js scene — only when data is ready
@@ -130,7 +152,9 @@ export default function BuildingViewer3D() {
       const geo = new THREE.BufferGeometry()
       geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3))
       geo.computeVertexNormals()
-      group.add(new THREE.Mesh(geo, material))
+      const mesh = new THREE.Mesh(geo, material)
+      mesh.userData = { egid: feat.properties.egid }
+      group.add(mesh)
     }
     scene.add(group)
 
@@ -252,8 +276,73 @@ export default function BuildingViewer3D() {
     }
     animate()
 
+    const raycaster = new THREE.Raycaster()
+    const mouse = new THREE.Vector2()
+    let isDragging = false
+
+    const onMouseDown = () => { isDragging = true; setHoveredInfo(null) }
+    const onDocMouseUp = () => { isDragging = false }
+    const onMouseMove = (e: MouseEvent) => {
+      if (isDragging) return
+      const rect = container.getBoundingClientRect()
+      mouse.x = ((e.clientX - rect.left) / rect.width)  * 2 - 1
+      mouse.y = -((e.clientY - rect.top)  / rect.height) * 2 + 1
+      raycaster.setFromCamera(mouse, camera)
+      const targets = [
+        ...group.children,
+        ...(neighborGroupRef.current?.visible ? neighborGroupRef.current.children : []),
+      ]
+      const hit = raycaster.intersectObjects(targets, false)[0]
+      if (hit) {
+        const egid: number = (hit.object as THREE.Mesh).userData.egid
+        const gwr = selectedGWRRef.current.find(b => Number(b.egid) === egid)
+        const x = e.clientX - rect.left
+        const y = e.clientY - rect.top
+        if (gwr) {
+          const address = gwr.address !== '—' ? gwr.address : undefined
+          const egrid = selectedParcelRef.current?.egrid !== '—'
+            ? selectedParcelRef.current?.egrid : undefined
+          setHoveredInfo({ egid, address, egrid, x, y })
+        } else {
+          if (neighborCacheRef.current.has(egid)) {
+            const cached = neighborCacheRef.current.get(egid)
+            setHoveredInfo({ egid, address: cached?.address ?? undefined, egrid: cached?.egrid ?? undefined, x, y })
+          } else {
+            setHoveredInfo({ egid, x, y })
+            if (!fetchingRef.current.has(egid)) {
+              fetchingRef.current.add(egid)
+              findBuildingByEGID(String(egid))
+                .then(result => {
+                  neighborCacheRef.current.set(egid, result)
+                  setHoveredInfo(prev =>
+                    prev?.egid === egid
+                      ? { ...prev, address: result?.address ?? undefined, egrid: result?.egrid ?? undefined }
+                      : prev
+                  )
+                })
+                .catch(() => { neighborCacheRef.current.set(egid, null) })
+                .finally(() => { fetchingRef.current.delete(egid) })
+            }
+          }
+        }
+      } else {
+        setHoveredInfo(null)
+      }
+    }
+    const onMouseLeave = () => setHoveredInfo(null)
+
+    container.addEventListener('mousedown',  onMouseDown)
+    container.addEventListener('mousemove',  onMouseMove)
+    container.addEventListener('mouseleave', onMouseLeave)
+    document.addEventListener('mouseup', onDocMouseUp)
+
     return () => {
       cancelAnimationFrame(animId)
+      container.removeEventListener('mousedown',  onMouseDown)
+      container.removeEventListener('mousemove',  onMouseMove)
+      container.removeEventListener('mouseleave', onMouseLeave)
+      document.removeEventListener('mouseup', onDocMouseUp)
+      setHoveredInfo(null)
       ro.disconnect()
       controls.removeEventListener('change', onControlsChange)
       controls.dispose()
@@ -311,7 +400,9 @@ export default function BuildingViewer3D() {
       const geo = new THREE.BufferGeometry()
       geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3))
       geo.computeVertexNormals()
-      ng.add(new THREE.Mesh(geo, mat))
+      const mesh = new THREE.Mesh(geo, mat)
+      mesh.userData = { egid: feat.properties.egid }
+      ng.add(mesh)
     }
   }, [neighborData, state]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -380,6 +471,23 @@ export default function BuildingViewer3D() {
       {state.status === 'idle' && (
         <div className="absolute inset-0 flex items-center justify-center px-8 pointer-events-none">
           <p className="text-[12px] text-white/15 text-center">Select a parcel to view 3D geometry.</p>
+        </div>
+      )}
+
+      {hoveredInfo && (
+        <div
+          className="absolute z-20 pointer-events-none select-none"
+          style={{ left: hoveredInfo.x + 14, top: hoveredInfo.y - 10 }}
+        >
+          <div className="bg-black/80 backdrop-blur-sm rounded border border-white/10 px-2.5 py-1.5 space-y-0.5">
+            {hoveredInfo.address && (
+              <p className="text-[11px] text-white/80 leading-tight">{hoveredInfo.address}</p>
+            )}
+            <p className="text-[10px] text-white/40 font-mono leading-tight">
+              EGID {hoveredInfo.egid}
+              {hoveredInfo.egrid && <> · EGRID {hoveredInfo.egrid}</>}
+            </p>
+          </div>
         </div>
       )}
 

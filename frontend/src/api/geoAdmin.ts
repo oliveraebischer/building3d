@@ -149,6 +149,30 @@ export async function identifyParcel(
   }
 }
 
+/** Returns address and parcel EGRID for a single building by its EGID. */
+export async function findBuildingByEGID(
+  egid: string,
+): Promise<{ address: string | null; egrid: string | null } | null> {
+  const params = new URLSearchParams({
+    layer: 'ch.bfs.gebaeude_wohnungs_register',
+    searchText: egid,
+    searchField: 'egid',
+    returnGeometry: 'false',
+    sr: '4326',
+    lang: 'en',
+  })
+  const res = await fetch(`${FIND}?${params}`)
+  if (!res.ok) return null
+  const data = await res.json()
+  const results = data.results ?? []
+  if (!results.length) return null
+  const a = results[0].attributes ?? results[0]
+  return {
+    address: a.strname_deinr && a.strname_deinr !== '—' ? String(a.strname_deinr) : null,
+    egrid: a.egrid ? String(a.egrid) : null,
+  }
+}
+
 /** Returns all GWR buildings whose parcel EGRID matches the given parcel EGRID. */
 export async function findBuildingsByEGRID(egrid: string): Promise<GwrFeature[]> {
   if (!egrid || egrid === '—') return []
