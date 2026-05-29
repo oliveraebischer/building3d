@@ -98,6 +98,11 @@ type MapState = {
   removeFromPortfolio: (egrid: string) => void
   portfolioHighlightFn: ((geoms: GeoJSON.Polygon[]) => void) | null
   setPortfolioHighlightFn: (fn: (geoms: GeoJSON.Polygon[]) => void) => void
+  // Analysis panel ↔ 3D viewer building highlight
+  analysisSelectedEgid: number | null
+  setAnalysisSelectedEgid: (id: number | null) => void
+  analysisHoveredEgid: number | null
+  setAnalysisHoveredEgid: (id: number | null) => void
 }
 
 export const useMapStore = create<MapState>((set, get) => ({
@@ -182,4 +187,8 @@ export const useMapStore = create<MapState>((set, get) => ({
   }),
   portfolioHighlightFn: null,
   setPortfolioHighlightFn: (fn) => set({ portfolioHighlightFn: fn }),
+  analysisSelectedEgid: null,
+  setAnalysisSelectedEgid: (id) => set({ analysisSelectedEgid: id }),
+  analysisHoveredEgid: null,
+  setAnalysisHoveredEgid: (id) => set({ analysisHoveredEgid: id }),
 }))

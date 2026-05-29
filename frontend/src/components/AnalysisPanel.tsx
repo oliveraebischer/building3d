@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { useMapStore } from '../store/mapStore'
 import { COLLAPSED_W, SEPARATOR_W } from '../constants'
 import BuildingViewer3D from './BuildingViewer3D'
+import AnalysisModules from './AnalysisModules'
 
 export default function AnalysisPanel() {
   const { sidebarCollapsed, sidebarWidth, sidebarResizing,
@@ -52,11 +53,13 @@ export default function AnalysisPanel() {
         transition: sidebarResizing ? 'none' : 'left 280ms cubic-bezier(0.4,0,0.2,1)',
       }}
     >
-      {/* Left panel — 3D viewer placeholder */}
+      {/* Left panel — analysis modules */}
       <div
-        className="h-full bg-[#080808] shrink-0"
+        className="h-full shrink-0 overflow-hidden"
         style={{ width: `${leftPct}%` }}
-      />
+      >
+        <AnalysisModules />
+      </div>
 
       {/* Draggable vertical divider */}
       <div
