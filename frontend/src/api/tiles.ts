@@ -1,5 +1,7 @@
 const STAC_BASE = 'https://data.geo.admin.ch/api/stac/v1'
 const COLLECTION = 'ch.swisstopo.swissbuildings3d_3_0'
+const TILE_CACHE_KEY = 'building3d_tile_index'
+const TILE_CACHE_TTL = 24 * 60 * 60 * 1000  // 24 h
 
 export type TileGridFeature = {
   id: string
@@ -19,18 +21,36 @@ type StacItem = {
   assets?: Record<string, { href: string; type?: string } | undefined>
 }
 
+type TileCache = { tiles: TileGridFeature[]; savedAt: number }
+
+function loadTileCache(): TileGridFeature[] | null {
+  try {
+    const raw = localStorage.getItem(TILE_CACHE_KEY)
+    if (!raw) return null
+    const { tiles, savedAt } = JSON.parse(raw) as TileCache
+    return Date.now() - savedAt < TILE_CACHE_TTL ? tiles : null
+  } catch { return null }
+}
+
+function saveTileCache(tiles: TileGridFeature[]) {
+  try {
+    localStorage.setItem(TILE_CACHE_KEY, JSON.stringify({ tiles, savedAt: Date.now() }))
+  } catch { /* quota exceeded — ignore */ }
+}
+
 export async function fetchAllTiles(): Promise<TileGridFeature[]> {
+  const cached = loadTileCache()
+  if (cached) return cached
+
   const features: TileGridFeature[] = []
-  let url: string | null = `${STAC_BASE}/collections/${COLLECTION}/items?limit=1000`
+  let url: string | null = `${STAC_BASE}/collections/${COLLECTION}/items?limit=100`
   while (url) {
-    const res = await fetch(url)
+    const res = await fetch(url, { signal: AbortSignal.timeout(15_000) })
     if (!res.ok) break
     const data = await res.json()
     for (const item of (data.features ?? []) as StacItem[]) {
-      // Asset keys are full filenames (e.g. "…_2056_5728.gdb.zip") — find by extension
       const gdbEntry = Object.entries(item.assets ?? {}).find(([k]) => k.endsWith('.gdb.zip'))
       const gdbHref = gdbEntry?.[1]?.href
-      // Skip national-coverage items (e.g. swissbuildings3d_3_0_2025) — only keep individual tiles (id ends with _NNNN-MM)
       if (gdbHref && /_\d+-\d+$/.test(item.id)) {
         features.push({ id: item.id, geometry: item.geometry, gdbHref })
       }
@@ -38,6 +58,8 @@ export async function fetchAllTiles(): Promise<TileGridFeature[]> {
     const next = (data.links ?? []).find((l: { rel: string; href: string }) => l.rel === 'next')
     url = next?.href ?? null
   }
+
+  if (features.length > 0) saveTileCache(features)
   return features
 }
 

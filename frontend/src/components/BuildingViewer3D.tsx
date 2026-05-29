@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { useMapStore } from '../store/mapStore'
 import { fetchBuildings, type BuildingFeatureCollection } from '../api/buildings'
+import { fetchTerrain, type TerrainGrid } from '../api/terrain'
 
 type ViewerState =
   | { status: 'idle' }
@@ -10,14 +11,14 @@ type ViewerState =
   | { status: 'loading' }
   | { status: 'empty' }
   | { status: 'error' }
-  | { status: 'ready'; data: BuildingFeatureCollection }
+  | { status: 'ready'; data: BuildingFeatureCollection; terrain: TerrainGrid | null }
 
 export default function BuildingViewer3D() {
   const { selectedParcel, selectedGWR, downloadedTileIds } = useMapStore()
   const [state, setState] = useState<ViewerState>({ status: 'idle' })
   const canvasRef = useRef<HTMLDivElement>(null)
 
-  // Fetch building geometry when parcel/buildings change
+  // Fetch building geometry + terrain when parcel/buildings change
   useEffect(() => {
     if (!selectedParcel) { setState({ status: 'idle' }); return }
     if (downloadedTileIds.size === 0) { setState({ status: 'no-tile' }); return }
@@ -35,12 +36,16 @@ export default function BuildingViewer3D() {
 
     let cancelled = false
     setState({ status: 'loading' })
-    fetchBuildings(egids, bbox)
-      .then(data => {
-        if (cancelled) return
-        setState(data.features.length > 0 ? { status: 'ready', data } : { status: 'empty' })
-      })
-      .catch(() => { if (!cancelled) setState({ status: 'error' }) })
+
+    Promise.all([
+      fetchBuildings(egids, bbox),
+      fetchTerrain(bbox).catch(() => null),
+    ]).then(([data, terrain]) => {
+      if (cancelled) return
+      setState(data.features.length > 0
+        ? { status: 'ready', data, terrain }
+        : { status: 'empty' })
+    }).catch(() => { if (!cancelled) setState({ status: 'error' }) })
 
     return () => { cancelled = true }
   }, [selectedParcel?.egrid, selectedGWR, downloadedTileIds.size]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -66,7 +71,7 @@ export default function BuildingViewer3D() {
     dir.position.set(1, 2, 1)
     scene.add(dir)
 
-    // Collect all coords to compute scene centre and min elevation
+    // Collect all building coords to compute scene centre
     const allLngs: number[] = [], allLats: number[] = [], allZs: number[] = []
     for (const feat of state.data.features) {
       for (const poly of feat.geometry.coordinates)
@@ -77,7 +82,11 @@ export default function BuildingViewer3D() {
     }
     const cx = (Math.min(...allLngs) + Math.max(...allLngs)) / 2
     const cy = (Math.min(...allLats) + Math.max(...allLats)) / 2
-    const minZ = Math.min(...allZs)
+    const buildingMinZ = Math.min(...allZs)
+    // Terrain is at or below buildings; use terrain min as scene floor
+    const minZ = state.terrain
+      ? Math.min(buildingMinZ, state.terrain.min_elevation)
+      : buildingMinZ
     const cosLat = Math.cos(cy * Math.PI / 180)
     const toLocal = (lng: number, lat: number, z: number): [number, number, number] => [
       (lng - cx) * cosLat * 111320,
@@ -85,12 +94,12 @@ export default function BuildingViewer3D() {
       -(lat - cy) * 111320,
     ]
 
+    // Buildings
     const material = new THREE.MeshPhongMaterial({
       color: 0x2a6099,
       side: THREE.DoubleSide,
       flatShading: true,
     })
-
     const group = new THREE.Group()
     for (const feat of state.data.features) {
       const positions: number[] = []
@@ -111,9 +120,49 @@ export default function BuildingViewer3D() {
     }
     scene.add(group)
 
-    const box = new THREE.Box3().setFromObject(group)
-    const center = box.getCenter(new THREE.Vector3())
-    const size = box.getSize(new THREE.Vector3())
+    // Terrain mesh
+    // LV95 is metric: E-centerE→X, elev-minZ→Y, -(N-centerN)→Z
+    let terrainMesh: THREE.Mesh | null = null
+    let terrainMat: THREE.MeshLambertMaterial | null = null
+
+    if (state.terrain) {
+      const N = state.terrain.grid_size
+      const [exp_minE, exp_minN, exp_maxE, exp_maxN] = state.terrain.bbox_lv95
+      const centerE = (exp_minE + exp_maxE) / 2
+      const centerN = (exp_minN + exp_maxN) / 2
+      const fallbackElev = state.terrain.min_elevation
+
+      const vertAt = (col: number, row: number): [number, number, number] => {
+        const E = exp_minE + col * (exp_maxE - exp_minE) / (N - 1)
+        const Nv = exp_minN + row * (exp_maxN - exp_minN) / (N - 1)
+        const elev = state.terrain!.elevations[row][col] ?? fallbackElev
+        return [E - centerE, elev - minZ, -(Nv - centerN)]
+      }
+
+      const tPositions: number[] = []
+      for (let row = 0; row < N - 1; row++) {
+        for (let col = 0; col < N - 1; col++) {
+          const v00 = vertAt(col,     row)
+          const v10 = vertAt(col + 1, row)
+          const v01 = vertAt(col,     row + 1)
+          const v11 = vertAt(col + 1, row + 1)
+          tPositions.push(...v00, ...v10, ...v01, ...v10, ...v11, ...v01)
+        }
+      }
+
+      const terrainGeo = new THREE.BufferGeometry()
+      terrainGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(tPositions), 3))
+      terrainGeo.computeVertexNormals()
+      terrainMat = new THREE.MeshLambertMaterial({ color: 0x4a6b3a, side: THREE.FrontSide })
+      terrainMesh = new THREE.Mesh(terrainGeo, terrainMat)
+      scene.add(terrainMesh)
+    }
+
+    // Camera framing — center on buildings; maxDim from full scene (includes terrain)
+    const groupBox = new THREE.Box3().setFromObject(group)
+    const center = groupBox.getCenter(new THREE.Vector3())
+    const sceneBox = new THREE.Box3().setFromObject(scene)
+    const size = sceneBox.getSize(new THREE.Vector3())
     const maxDim = Math.max(size.x, size.z, 10)
     camera.position.set(center.x + maxDim, center.y + maxDim * 0.8, center.z + maxDim)
     camera.lookAt(center)
@@ -123,6 +172,38 @@ export default function BuildingViewer3D() {
     controls.enableDamping = true
     controls.dampingFactor = 0.08
     controls.update()
+
+    // Camera floor constraint — can't go below terrain surface
+    const terrainHeightAt = (sceneX: number, sceneZ: number): number => {
+      if (!state.terrain) return 0
+      const N = state.terrain.grid_size
+      const [exp_minE, exp_minN, exp_maxE, exp_maxN] = state.terrain.bbox_lv95
+      const centerE = (exp_minE + exp_maxE) / 2
+      const centerN = (exp_minN + exp_maxN) / 2
+      const E = sceneX + centerE
+      const Nv = -sceneZ + centerN
+      const u = (E - exp_minE) / (exp_maxE - exp_minE) * (N - 1)
+      const v = (Nv - exp_minN) / (exp_maxN - exp_minN) * (N - 1)
+      const u0 = Math.max(0, Math.min(N - 2, Math.floor(u)))
+      const v0 = Math.max(0, Math.min(N - 2, Math.floor(v)))
+      const fu = u - u0, fv = v - v0
+      const el = state.terrain.elevations
+      const fb = state.terrain.min_elevation
+      const e00 = el[v0][u0] ?? fb,       e10 = el[v0][u0 + 1] ?? fb
+      const e01 = el[v0 + 1][u0] ?? fb,   e11 = el[v0 + 1][u0 + 1] ?? fb
+      return (e00 * (1 - fu) * (1 - fv) + e10 * fu * (1 - fv) +
+              e01 * (1 - fu) * fv        + e11 * fu * fv) - minZ
+    }
+
+    const onControlsChange = () => {
+      const floorY = terrainHeightAt(camera.position.x, camera.position.z)
+      const minY = floorY + 1.5
+      if (camera.position.y < minY) {
+        camera.position.y = minY
+        if (controls.target.y < minY - 0.5) controls.target.y = minY - 0.5
+      }
+    }
+    controls.addEventListener('change', onControlsChange)
 
     const ro = new ResizeObserver(() => {
       const { width: w, height: h } = container.getBoundingClientRect()
@@ -144,6 +225,7 @@ export default function BuildingViewer3D() {
     return () => {
       cancelAnimationFrame(animId)
       ro.disconnect()
+      controls.removeEventListener('change', onControlsChange)
       controls.dispose()
       renderer.dispose()
       if (container.contains(renderer.domElement)) container.removeChild(renderer.domElement)
@@ -151,6 +233,7 @@ export default function BuildingViewer3D() {
         if (child instanceof THREE.Mesh) child.geometry.dispose()
       }
       material.dispose()
+      if (terrainMesh) { terrainMesh.geometry.dispose(); terrainMat?.dispose() }
     }
   }, [state])
 

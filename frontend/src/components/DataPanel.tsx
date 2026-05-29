@@ -72,19 +72,24 @@ export default function DataPanel() {
 
   const [open, setOpen] = useState(true)
   const [downloadedMeta, setDownloadedMeta] = useState<DownloadedTile[]>([])
+  const [loadError, setLoadError] = useState(false)
+  const [retryCount, setRetryCount] = useState(0)
 
-  // Fetch tile grid + downloaded list when entering data mode (once)
+  // Fetch tile grid when entering data mode (once); downloaded list is fetched independently
   useEffect(() => {
     if (!dataMode || tileGrid.length > 0) return
+    setLoadError(false)
     setTileGridLoading(true)
-    Promise.all([fetchAllTiles(), fetchDownloadedTiles()])
-      .then(([tiles, downloaded]) => {
-        setTileGrid(tiles)
-        setDownloadedMeta(downloaded)
-        setDownloadedTileIds(downloaded.map((d) => d.id))
-      })
+    fetchAllTiles()
+      .then((tiles) => setTileGrid(tiles))
+      .catch(() => setLoadError(true))
       .finally(() => setTileGridLoading(false))
-  }, [dataMode]) // eslint-disable-line react-hooks/exhaustive-deps
+    // Downloaded tiles are independent — a dead backend must not block the tile grid
+    fetchDownloadedTiles().then((downloaded) => {
+      setDownloadedMeta(downloaded)
+      setDownloadedTileIds(downloaded.map((d) => d.id))
+    })
+  }, [dataMode, retryCount]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Refresh metadata list after each download or delete
   useEffect(() => {
@@ -95,6 +100,12 @@ export default function DataPanel() {
   const handleDelete = async (id: string) => {
     await deleteTile(id)
     removeDownloadedTileId(id)
+  }
+
+  const handleRetry = () => {
+    setLoadError(false)
+    setTileGrid([])
+    setRetryCount(c => c + 1)
   }
 
   const downloadCount = downloadedTileIds.size
@@ -126,13 +137,25 @@ export default function DataPanel() {
           <div className="border-t border-white/[0.06]">
             {tileGridLoading && <LoadingRow />}
 
-            {!tileGridLoading && downloadCount === 0 && (
+            {!tileGridLoading && loadError && (
+              <div className="px-4 py-4 space-y-1.5">
+                <p className="text-[11px] text-red-400/70">Failed to load tile index.</p>
+                <button
+                  onClick={handleRetry}
+                  className="text-[11px] text-white/50 hover:text-white/80 underline transition-colors"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+
+            {!tileGridLoading && !loadError && downloadCount === 0 && (
               <p className="px-4 py-4 text-[11px] text-white/30 italic">
                 Click a tile on the map to download it.
               </p>
             )}
 
-            {!tileGridLoading && downloadCount > 0 && (
+            {!tileGridLoading && !loadError && downloadCount > 0 && (
               <div className="divide-y divide-white/[0.05]">
                 {downloadedMeta.map((tile) => (
                   <TileRow
