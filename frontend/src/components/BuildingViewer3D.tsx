@@ -5,6 +5,7 @@ import { useMapStore } from '../store/mapStore'
 import { fetchBuildings, fetchNeighborBuildings, type BuildingFeatureCollection } from '../api/buildings'
 import { fetchTerrain, type TerrainGrid } from '../api/terrain'
 import { findBuildingByEGID } from '../api/geoAdmin'
+import { computeMeasurements } from '../utils/buildingMeasurements'
 
 const fmtLV95 = (n: number) =>
   n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '\u2019') // Swiss apostrophe: 2'660'123
@@ -47,6 +48,7 @@ export default function BuildingViewer3D() {
   const {
     selectedParcel, selectedGWR, downloadedTileIds,
     analysisSelectedEgid, analysisHoveredEgid,
+    setBuildingMeasurements, clearBuildingMeasurements,
   } = useMapStore()
   const [state, setState] = useState<ViewerState>({ status: 'idle' })
   const canvasRef = useRef<HTMLDivElement>(null)
@@ -398,6 +400,16 @@ export default function BuildingViewer3D() {
               e01 * (1 - fu) * fv        + e11 * fu * fv) - minZ
     }
 
+    // Compute measurements for each parcel building using 3D mesh + terrain
+    const measurements: Record<number, ReturnType<typeof computeMeasurements>> = {}
+    for (const feat of state.data.features) {
+      const mesh = meshByEgidRef.current.get(feat.properties.egid)
+      if (mesh) {
+        measurements[feat.properties.egid] = computeMeasurements(mesh, feat, terrainHeightAt, toLocal)
+      }
+    }
+    setBuildingMeasurements(measurements)
+
     const onControlsChange = () => {
       const floorY = terrainHeightAt(camera.position.x, camera.position.z)
       const minY = floorY + 1.5
@@ -552,6 +564,7 @@ export default function BuildingViewer3D() {
       highlightMat.dispose()
       panelSelectMat.dispose()
       meshByEgidRef.current.clear()
+      clearBuildingMeasurements()
       defaultMatRef.current = null
       highlightMatRef.current = null
       panelSelectMatRef.current = null

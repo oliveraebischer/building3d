@@ -3,6 +3,7 @@ import maplibregl from 'maplibre-gl'
 import type { ParcelFeature, GwrFeature } from '../api/geoAdmin'
 import { downloadTile as apiDownloadTile } from '../api/tiles'
 import type { TileGridFeature } from '../api/tiles'
+import type { BuildingMeasurements } from '../utils/buildingMeasurements'
 
 export type PortfolioEntry = {
   parcel: ParcelFeature
@@ -103,6 +104,10 @@ type MapState = {
   setAnalysisSelectedEgid: (id: number | null) => void
   analysisHoveredEgid: number | null
   setAnalysisHoveredEgid: (id: number | null) => void
+  // Measurements computed from 3D geometry
+  buildingMeasurements: Record<number, BuildingMeasurements> | null
+  setBuildingMeasurements: (m: Record<number, BuildingMeasurements>) => void
+  clearBuildingMeasurements: () => void
 }
 
 export const useMapStore = create<MapState>((set, get) => ({
@@ -191,4 +196,7 @@ export const useMapStore = create<MapState>((set, get) => ({
   setAnalysisSelectedEgid: (id) => set({ analysisSelectedEgid: id }),
   analysisHoveredEgid: null,
   setAnalysisHoveredEgid: (id) => set({ analysisHoveredEgid: id }),
+  buildingMeasurements: null,
+  setBuildingMeasurements: (m) => set({ buildingMeasurements: m }),
+  clearBuildingMeasurements: () => set({ buildingMeasurements: null }),
 }))
