@@ -113,15 +113,17 @@ export default function Sidebar() {
   const [recentSearches, setRecentSearches] = useState<SearchSelectEntry[]>(() => loadRecent())
 
   const handleSearchSelect = useCallback((entry: SearchSelectEntry) => {
+    if (dataMode) handleDataClick()
     setRecentSearches(prev => {
       const filtered = prev.filter(r => r.label !== entry.label)
       const next = [entry, ...filtered].slice(0, MAX_RECENT)
       saveRecent(next)
       return next
     })
-  }, [])
+  }, [dataMode]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleRecentClick = useCallback((entry: SearchSelectEntry) => {
+    if (dataMode) handleDataClick()
     if (!mapInstance) return
     const isAddress = entry.origin === 'address'
     const targetZoom = isAddress ? ADDRESS_ZOOM : entry.zoomlevel
@@ -129,7 +131,7 @@ export default function Sidebar() {
     if (isAddress) {
       mapInstance.once('moveend', () => lookupParcel?.(entry.lon, entry.lat, true))
     }
-  }, [mapInstance, lookupParcel])
+  }, [dataMode, mapInstance, lookupParcel]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Data mode save/restore refs
   const prevLayerRef = useRef(activeBaseLayerId)
