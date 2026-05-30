@@ -189,7 +189,7 @@ function BuildingsModule() {
       >
         <span className="shrink-0 text-white/35"><BuildingIcon /></span>
         <div className="flex-1 min-w-0">
-          <p className="text-[12px] text-white/75 font-medium leading-tight">Buildings</p>
+          <p className="text-[12px] text-white/75 font-medium leading-tight">GWR</p>
           <p className="text-[10px] text-white/30 leading-tight mt-0.5">{summary}</p>
         </div>
         <ChevronIcon open={open} />
@@ -219,11 +219,23 @@ function BuildingsModule() {
 
 // ─── Measurements module ──────────────────────────────────────────────────────
 
-function MeasurementRow({ m, address }: { m: BuildingMeasurements; address: string }) {
+function MeasurementRow({
+  m, address, selected, onHoverEnter, onHoverLeave,
+}: {
+  m: BuildingMeasurements
+  address: string
+  selected: boolean
+  onHoverEnter: () => void
+  onHoverLeave: () => void
+}) {
   return (
-    <div className="border-b border-white/[0.04] last:border-0">
+    <div
+      className={`border-b border-white/[0.04] last:border-0 transition-colors ${selected ? 'bg-accent/[0.07]' : ''}`}
+      onMouseEnter={onHoverEnter}
+      onMouseLeave={onHoverLeave}
+    >
       <div className="px-4 py-2.5">
-        <p className="text-[11px] text-white/60 font-medium leading-tight truncate mb-1.5">
+        <p className={`text-[11px] font-medium leading-tight truncate mb-1.5 ${selected ? 'text-accent' : 'text-white/60'}`}>
           {address}
         </p>
         <div className="divide-y divide-white/[0.03]">
@@ -239,7 +251,7 @@ function MeasurementRow({ m, address }: { m: BuildingMeasurements; address: stri
 }
 
 function MeasurementsModule() {
-  const { selectedGWR, buildingMeasurements } = useMapStore()
+  const { selectedGWR, buildingMeasurements, setAnalysisHoveredEgid, analysisSelectedEgid } = useMapStore()
   const [open, setOpen] = useState(false)
 
   const egidToAddress = Object.fromEntries(
@@ -279,7 +291,14 @@ function MeasurementsModule() {
             <p className="px-4 pb-4 pt-1 text-[11px] text-white/20 italic">No 3D data available.</p>
           ) : (
             entries.map(({ egid, m }) => (
-              <MeasurementRow key={egid} m={m} address={egidToAddress[egid] ?? `EGID ${egid}`} />
+              <MeasurementRow
+                key={egid}
+                m={m}
+                address={egidToAddress[egid] ?? `EGID ${egid}`}
+                selected={egid === analysisSelectedEgid}
+                onHoverEnter={() => { if (egid !== analysisSelectedEgid) setAnalysisHoveredEgid(egid) }}
+                onHoverLeave={() => setAnalysisHoveredEgid(null)}
+              />
             ))
           )}
         </div>
