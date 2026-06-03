@@ -1,9 +1,14 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { useMapStore } from '../store/mapStore'
 import type { GwrFeature } from '../api/geoAdmin'
 import type { BuildingMeasurements } from '../utils/buildingMeasurements'
 import { computeSunPosition, dayOfYearToLabel } from '../utils/solarPosition'
 import SunShadowCharts from './SunShadowCharts'
+import {
+  calculateGEAK, getDefaultInputs, defaultCOP,
+  GEAK_CLASS_COLORS, HEATING_SYSTEMS, USAGES, VENTILATION_TYPES,
+} from '../utils/geakCalculation'
+import type { GEAKInputs, GEAKHeatingSystem, GEAKUsage, GEAKVentilation } from '../utils/geakCalculation'
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 
@@ -573,6 +578,341 @@ function EnergyModule() {
   )
 }
 
+// ─── GEAK module ──────────────────────────────────────────────────────────────
+
+function GEAKIcon() {
+  return (
+    <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={1.8}
+      strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M3 9h18M9 9v12" />
+      <path d="M13 13h4M13 17h4" />
+    </svg>
+  )
+}
+
+// A–G scale bar for one label
+function GEAKScaleBar({ currentClass, value, unit }: {
+  currentClass: string
+  value: number
+  unit: string
+}) {
+  const classes = ['A', 'B', 'C', 'D', 'E', 'F', 'G']
+  return (
+    <div className="space-y-1">
+      <div className="flex gap-px">
+        {classes.map(cls => {
+          const active = cls === currentClass
+          return (
+            <div
+              key={cls}
+              style={{ backgroundColor: GEAK_CLASS_COLORS[cls] + (active ? 'ff' : '33') }}
+              className={`flex-1 h-5 flex items-center justify-center transition-all ${
+                active ? 'ring-1 ring-white/60 ring-offset-1 ring-offset-[#080808]' : ''
+              }`}
+            >
+              <span className={`text-[9px] font-bold ${active ? 'text-white' : 'text-white/30'}`}>
+                {cls}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+      <div className="flex justify-between">
+        <span className="text-[9px] text-white/20">A</span>
+        <span className="text-[10px] font-mono text-white/55">
+          {value} <span className="text-[9px] text-white/25">{unit}</span>
+        </span>
+        <span className="text-[9px] text-white/20">G</span>
+      </div>
+    </div>
+  )
+}
+
+// Compact number input
+function NumInput({
+  label, value, onChange, unit, step = 0.01, min = 0,
+}: {
+  label: string
+  value: number
+  onChange: (v: number) => void
+  unit?: string
+  step?: number
+  min?: number
+}) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-[9px] text-white/25">{label}</span>
+      <div className="flex items-baseline gap-1">
+        <input
+          type="number"
+          step={step}
+          min={min}
+          value={value}
+          onChange={e => onChange(Number(e.target.value))}
+          className="w-full text-[10px] text-white/70 bg-white/[0.04] border border-white/[0.06] rounded px-1.5 py-0.5 outline-none focus:border-accent/40"
+        />
+        {unit && <span className="text-[9px] text-white/20 shrink-0">{unit}</span>}
+      </div>
+    </div>
+  )
+}
+
+// Compact select input
+function SelInput<T extends string>({
+  label, value, options, onChange,
+}: {
+  label: string
+  value: T
+  options: T[]
+  onChange: (v: T) => void
+}) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-[9px] text-white/25">{label}</span>
+      <select
+        value={value}
+        onChange={e => onChange(e.target.value as T)}
+        className="text-[10px] text-white/70 bg-white/[0.04] border border-white/[0.06] rounded px-1.5 py-0.5 outline-none focus:border-accent/40"
+      >
+        {options.map(o => <option key={o} value={o}>{o}</option>)}
+      </select>
+    </div>
+  )
+}
+
+// Collapsible sub-section inside GEAK
+function SubSection({ title, children }: { title: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="border-t border-white/[0.04]">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between px-0 py-2 text-left"
+      >
+        <span className="text-[10px] text-white/40 font-medium">{title}</span>
+        <ChevronIcon open={open} />
+      </button>
+      {open && <div className="pb-2 space-y-2">{children}</div>}
+    </div>
+  )
+}
+
+function GEAKModule() {
+  const { selectedGWR, buildingMeasurements, analysisSelectedEgid } = useMapStore()
+  const [open, setOpen] = useState(false)
+
+  // Derive the active building
+  const activeBldg: GwrFeature | null = useMemo(() => {
+    if (analysisSelectedEgid != null) {
+      return selectedGWR.find(b => Number(b.egid) === analysisSelectedEgid) ?? selectedGWR[0] ?? null
+    }
+    return selectedGWR[0] ?? null
+  }, [selectedGWR, analysisSelectedEgid])
+
+  const activeMeasurements: BuildingMeasurements | null = useMemo(() => {
+    if (!buildingMeasurements) return null
+    const egid = activeBldg ? Number(activeBldg.egid) : null
+    return egid != null ? (buildingMeasurements[egid] ?? null) : null
+  }, [buildingMeasurements, activeBldg])
+
+  const [inputs, setInputs] = useState<GEAKInputs>(() =>
+    getDefaultInputs(activeBldg, activeMeasurements)
+  )
+
+  // Re-derive defaults when active building or measurements change
+  useEffect(() => {
+    setInputs(getDefaultInputs(activeBldg, activeMeasurements))
+  }, [activeBldg, activeMeasurements]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const results = useMemo(() => calculateGEAK(inputs), [inputs])
+
+  function set<K extends keyof GEAKInputs>(key: K, val: GEAKInputs[K]) {
+    setInputs(prev => ({ ...prev, [key]: val }))
+  }
+
+  const headerSummary = activeBldg
+    ? `${results.classHuelle} · ${results.classGesamt} · ${results.classCO2}`
+    : 'No parcel selected'
+
+  return (
+    <div className="border-b border-white/[0.05]">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center gap-3 px-4 py-3.5 text-left hover:bg-white/[0.03] transition-colors"
+      >
+        <span className="shrink-0 text-white/35"><GEAKIcon /></span>
+        <div className="flex-1 min-w-0">
+          <p className="text-[12px] text-white/75 font-medium leading-tight">GEAK</p>
+          <p className="text-[10px] text-white/30 leading-tight mt-0.5">{headerSummary}</p>
+        </div>
+        {activeBldg && (
+          <div className="flex gap-1 shrink-0">
+            {[results.classHuelle, results.classGesamt, results.classCO2].map((cls, i) => (
+              <span
+                key={i}
+                style={{ backgroundColor: GEAK_CLASS_COLORS[cls] + '33', color: GEAK_CLASS_COLORS[cls] }}
+                className="text-[9px] font-bold px-1.5 py-0.5 rounded"
+              >
+                {cls}
+              </span>
+            ))}
+          </div>
+        )}
+        <ChevronIcon open={open} />
+      </button>
+
+      {open && (
+        <div className="px-4 pb-4 space-y-3">
+          {!activeBldg ? (
+            <p className="text-[11px] text-white/20 italic pt-1">No parcel selected.</p>
+          ) : (
+            <>
+              {/* Results */}
+              <div className="space-y-3 pt-1">
+                <div className="space-y-1">
+                  <p className="text-[9px] text-white/25 uppercase tracking-widest">Gebäudehülle</p>
+                  <GEAKScaleBar
+                    currentClass={results.classHuelle}
+                    value={results.qHEff}
+                    unit="kWh/(m²·a)"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <p className="text-[9px] text-white/25 uppercase tracking-widest">Gesamtenergie</p>
+                  <GEAKScaleBar
+                    currentClass={results.classGesamt}
+                    value={results.eGew}
+                    unit="kWh/(m²·a)"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <p className="text-[9px] text-white/25 uppercase tracking-widest">CO₂ direkt</p>
+                  <GEAKScaleBar
+                    currentClass={results.classCO2}
+                    value={results.co2Direkt}
+                    unit="kg/(m²·a)"
+                  />
+                </div>
+              </div>
+
+              {/* Divider */}
+              <div className="flex items-center gap-2 pt-1">
+                <div className="flex-1 h-px bg-white/[0.05]" />
+                <span className="text-[9px] text-white/20 uppercase tracking-widest">Eingaben</span>
+                <div className="flex-1 h-px bg-white/[0.05]" />
+              </div>
+
+              {/* Gebäude — always visible */}
+              <div className="grid grid-cols-2 gap-2">
+                <NumInput
+                  label="Energiebezugsfläche A_E"
+                  value={inputs.aE}
+                  onChange={v => set('aE', Math.max(1, v))}
+                  unit="m²"
+                  step={1}
+                  min={1}
+                />
+                <SelInput<GEAKUsage>
+                  label="Nutzung"
+                  value={inputs.usage}
+                  options={USAGES}
+                  onChange={v => set('usage', v)}
+                />
+              </div>
+              <div className="flex items-baseline gap-2">
+                <span className="text-[9px] text-white/25">Kanton</span>
+                <span className="text-[10px] text-white/50 font-mono">{inputs.canton}</span>
+              </div>
+
+              {/* Gebäudehülle */}
+              <SubSection title="Gebäudehülle">
+                <div className="grid grid-cols-2 gap-2">
+                  <NumInput label="U-Wand" value={inputs.uWall}   onChange={v => set('uWall', v)}   unit="W/(m²·K)" />
+                  <NumInput label="U-Dach"  value={inputs.uRoof}   onChange={v => set('uRoof', v)}   unit="W/(m²·K)" />
+                  <NumInput label="U-Boden" value={inputs.uFloor}  onChange={v => set('uFloor', v)}  unit="W/(m²·K)" />
+                  <NumInput label="U-Fenster" value={inputs.uWindow} onChange={v => set('uWindow', v)} unit="W/(m²·K)" />
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <NumInput label="Fensteranteil" value={Math.round(inputs.windowFraction * 100)} onChange={v => set('windowFraction', v / 100)} unit="%" step={1} min={5} />
+                  <NumInput label="g-Wert" value={inputs.gValue} onChange={v => set('gValue', v)} />
+                  <NumInput label="Verschattung Fs" value={inputs.shadingFs} onChange={v => set('shadingFs', v)} />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <NumInput label="Luftdichtheit n₅₀" value={inputs.n50} onChange={v => set('n50', v)} unit="h⁻¹" step={0.1} />
+                  <NumInput label="Wärmebrücken ΔU"   value={inputs.thermalBridges} onChange={v => set('thermalBridges', v)} unit="W/(m²·K)" />
+                </div>
+              </SubSection>
+
+              {/* Heizung & WW */}
+              <SubSection title="Heizung & Warmwasser">
+                <SelInput<GEAKHeatingSystem>
+                  label="Heizsystem"
+                  value={inputs.heatingSystem}
+                  options={HEATING_SYSTEMS}
+                  onChange={v => {
+                    set('heatingSystem', v)
+                    set('cop', defaultCOP(v))
+                  }}
+                />
+                <NumInput
+                  label={inputs.heatingSystem.startsWith('WP') ? 'COP' : 'Wirkungsgrad η'}
+                  value={inputs.cop}
+                  onChange={v => set('cop', v)}
+                  step={0.1}
+                  min={0.5}
+                />
+              </SubSection>
+
+              {/* Lüftung */}
+              <SubSection title="Lüftung">
+                <SelInput<GEAKVentilation>
+                  label="Lüftungstyp"
+                  value={inputs.ventilation}
+                  options={VENTILATION_TYPES}
+                  onChange={v => set('ventilation', v)}
+                />
+                {inputs.ventilation === 'Mechanisch' && (
+                  <NumInput
+                    label="Wärmerückgewinnungsgrad"
+                    value={Math.round(inputs.heatRecovery * 100)}
+                    onChange={v => set('heatRecovery', v / 100)}
+                    unit="%"
+                    step={1}
+                    min={0}
+                  />
+                )}
+              </SubSection>
+
+              {/* PV */}
+              <SubSection title="Photovoltaik">
+                <NumInput
+                  label="PV-Leistung"
+                  value={inputs.pvKwp}
+                  onChange={v => set('pvKwp', v)}
+                  unit="kWp"
+                  step={0.5}
+                  min={0}
+                />
+              </SubSection>
+
+              {/* Detail breakdown */}
+              <div className="border-t border-white/[0.04] pt-2 divide-y divide-white/[0.03]">
+                <Attr label="Heizwärmebedarf Q_H,eff" value={`${results.qHEff} kWh/(m²·a)`} />
+                <Attr label="Endenergie Heizung"       value={`${results.eH.toLocaleString()} kWh/a`} />
+                <Attr label="Endenergie Warmwasser"    value={`${results.eWW.toLocaleString()} kWh/a`} />
+                {results.eLueft > 0 && <Attr label="Hilfsenergie Lüftung" value={`${results.eLueft.toLocaleString()} kWh/a`} />}
+                {results.ePV > 0    && <Attr label="PV-Produktion"        value={`−${results.ePV.toLocaleString()} kWh/a`} />}
+                <Attr label="Gewichtete Energie E_gew" value={`${results.eGew} kWh/(m²·a)`} />
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Root ─────────────────────────────────────────────────────────────────────
 
 export default function AnalysisModules() {
@@ -584,6 +924,7 @@ export default function AnalysisModules() {
         <MeasurementsModule />
         <EnergyModule />
         <SunShadowModule />
+        <GEAKModule />
       </div>
     </div>
   )
