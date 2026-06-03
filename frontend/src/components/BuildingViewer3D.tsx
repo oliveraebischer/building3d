@@ -427,7 +427,11 @@ export default function BuildingViewer3D() {
     const controls = new OrbitControls(camera, renderer.domElement)
     controls.target.copy(center)
     controls.enableDamping = true
-    controls.dampingFactor = 0.08
+    controls.dampingFactor = 0.12
+    controls.screenSpacePanning = false  // pan moves target in world XZ plane, like a map
+    controls.minDistance = 3
+    controls.maxDistance = maxDim * 6
+    controls.maxPolarAngle = Math.PI / 2 - 0.02  // can't orbit below horizon
     controls.update()
 
     // Camera floor constraint — can't go below terrain surface
@@ -462,12 +466,12 @@ export default function BuildingViewer3D() {
     setBuildingMeasurements(measurements)
 
     const onControlsChange = () => {
-      const floorY = terrainHeightAt(camera.position.x, camera.position.z)
-      const minY = floorY + 1.5
-      if (camera.position.y < minY) {
-        camera.position.y = minY
-        if (controls.target.y < minY - 0.5) controls.target.y = minY - 0.5
-      }
+      // Keep camera above terrain surface
+      const camFloor = terrainHeightAt(camera.position.x, camera.position.z)
+      if (camera.position.y < camFloor + 2) camera.position.y = camFloor + 2
+      // Keep orbit target above terrain so rotations feel grounded
+      const tgtFloor = terrainHeightAt(controls.target.x, controls.target.z)
+      if (controls.target.y < tgtFloor) controls.target.y = tgtFloor
     }
     controls.addEventListener('change', onControlsChange)
 
