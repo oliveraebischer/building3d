@@ -108,6 +108,13 @@ type MapState = {
   buildingMeasurements: Record<number, BuildingMeasurements> | null
   setBuildingMeasurements: (m: Record<number, BuildingMeasurements>) => void
   clearBuildingMeasurements: () => void
+  // Sun & Shadow
+  sunDayOfYear: number
+  setSunDayOfYear: (d: number) => void
+  sunHourOfDay: number
+  setSunHourOfDay: (h: number) => void
+  sunSceneCenter: { lon: number; lat: number } | null
+  setSunSceneCenter: (c: { lon: number; lat: number } | null) => void
 }
 
 export const useMapStore = create<MapState>((set, get) => ({
@@ -199,4 +206,10 @@ export const useMapStore = create<MapState>((set, get) => ({
   buildingMeasurements: null,
   setBuildingMeasurements: (m) => set({ buildingMeasurements: m }),
   clearBuildingMeasurements: () => set({ buildingMeasurements: null }),
+  sunDayOfYear: 172,
+  setSunDayOfYear: (d) => set({ sunDayOfYear: d }),
+  sunHourOfDay: 12.0,
+  setSunHourOfDay: (h) => set({ sunHourOfDay: h }),
+  sunSceneCenter: null,
+  setSunSceneCenter: (c) => set({ sunSceneCenter: c }),
 }))

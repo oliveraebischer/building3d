@@ -6,6 +6,7 @@ import { fetchBuildings, fetchNeighborBuildings, type BuildingFeatureCollection 
 import { fetchTerrain, type TerrainGrid } from '../api/terrain'
 import { findBuildingByEGID } from '../api/geoAdmin'
 import { computeMeasurements } from '../utils/buildingMeasurements'
+import { computeSunPosition } from '../utils/solarPosition'
 
 const fmtLV95 = (n: number) =>
   n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '\u2019') // Swiss apostrophe: 2'660'123
@@ -49,6 +50,7 @@ export default function BuildingViewer3D() {
     selectedParcel, selectedGWR, downloadedTileIds,
     analysisSelectedEgid, analysisHoveredEgid,
     setBuildingMeasurements, clearBuildingMeasurements,
+    sunDayOfYear, sunHourOfDay, setSunSceneCenter,
   } = useMapStore()
   const [state, setState] = useState<ViewerState>({ status: 'idle' })
   const canvasRef = useRef<HTMLDivElement>(null)
@@ -85,6 +87,7 @@ export default function BuildingViewer3D() {
   const neighborMatRef   = useRef<THREE.MeshPhongMaterial | null>(null)
 
   // Refs for panel ↔ 3D viewer building highlight
+  const dirLightRef             = useRef<THREE.DirectionalLight | null>(null)
   const meshByEgidRef           = useRef<Map<number, THREE.Mesh>>(new Map())
   const defaultMatRef           = useRef<THREE.MeshPhongMaterial | null>(null)
   const highlightMatRef         = useRef<THREE.MeshPhongMaterial | null>(null)
@@ -152,12 +155,25 @@ export default function BuildingViewer3D() {
     const renderer = new THREE.WebGLRenderer({ antialias: true })
     renderer.setSize(width, height)
     renderer.setPixelRatio(window.devicePixelRatio)
+    renderer.shadowMap.enabled = true
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap
     container.appendChild(renderer.domElement)
 
     scene.add(new THREE.AmbientLight(0xffffff, 0.5))
     const dir = new THREE.DirectionalLight(0xffffff, 1.0)
+    dir.castShadow = true
+    dir.shadow.mapSize.set(2048, 2048)
+    dir.shadow.camera.near = 0.5
+    dir.shadow.camera.far = 2000
+    dir.shadow.camera.left   = -300
+    dir.shadow.camera.right  =  300
+    dir.shadow.camera.top    =  300
+    dir.shadow.camera.bottom = -300
+    dir.shadow.camera.updateProjectionMatrix()
+    dir.shadow.bias = -0.001
     dir.position.set(1, 2, 1)
     scene.add(dir)
+    dirLightRef.current = dir
 
     // Collect all building coords to compute scene centre
     const allLngs: number[] = [], allLats: number[] = [], allZs: number[] = []
@@ -187,6 +203,7 @@ export default function BuildingViewer3D() {
       ? lv95ToWgs84(...terrainCenterLv95)
       : [cx, cy]
     sceneCenterRef.current = { lon: originLon, lat: originLat }
+    setSunSceneCenter({ lon: originLon, lat: originLat })
     const cosLat = Math.cos(originLat * Math.PI / 180)
     const toLocal = (lng: number, lat: number, z: number): [number, number, number] => [
       (lng - originLon) * cosLat * 111320,
@@ -219,6 +236,8 @@ export default function BuildingViewer3D() {
       geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3))
       geo.computeVertexNormals()
       const mesh = new THREE.Mesh(geo, material)
+      mesh.castShadow = true
+      mesh.receiveShadow = true
       mesh.userData = { egid: feat.properties.egid, isNeighbor: false }
       meshByEgidRef.current.set(feat.properties.egid, mesh)
       group.add(mesh)
@@ -307,6 +326,7 @@ export default function BuildingViewer3D() {
       terrainGeo.computeVertexNormals()
       terrainMat = new THREE.MeshLambertMaterial({ color: 0x2a2a2a, side: THREE.FrontSide })
       terrainMesh = new THREE.Mesh(terrainGeo, terrainMat)
+      terrainMesh.receiveShadow = true
       scene.add(terrainMesh)
 
       terrainMatRef.current = terrainMat
@@ -565,6 +585,8 @@ export default function BuildingViewer3D() {
       panelSelectMat.dispose()
       meshByEgidRef.current.clear()
       clearBuildingMeasurements()
+      dirLightRef.current = null
+      setSunSceneCenter(null)
       defaultMatRef.current = null
       highlightMatRef.current = null
       panelSelectMatRef.current = null
@@ -626,6 +648,7 @@ export default function BuildingViewer3D() {
       geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3))
       geo.computeVertexNormals()
       const mesh = new THREE.Mesh(geo, mat)
+      mesh.castShadow = true
       mesh.userData = { egid: feat.properties.egid, isNeighbor: true }
       ng.add(mesh)
     }
@@ -644,6 +667,27 @@ export default function BuildingViewer3D() {
     mat.color.set(showMapLayer && compositeTexRef.current ? 0xffffff : 0x2a2a2a)
     mat.needsUpdate = true
   }, [showMapLayer])
+
+  // Update directional light position when sun day/time changes
+  useEffect(() => {
+    const light = dirLightRef.current
+    if (!light || state.status !== 'ready') return
+    const center = useMapStore.getState().sunSceneCenter
+    if (!center) return
+    const { azimuth, elevation } = computeSunPosition(center.lat, sunDayOfYear, sunHourOfDay)
+    if (elevation <= 0) {
+      light.intensity = 0
+      return
+    }
+    light.intensity = 1.0
+    const az = azimuth * Math.PI / 180
+    const el = elevation * Math.PI / 180
+    light.position.set(
+      Math.sin(az) * Math.cos(el) * 1000,
+      Math.sin(el) * 1000,
+      -Math.cos(az) * Math.cos(el) * 1000,
+    )
+  }, [sunDayOfYear, sunHourOfDay, state.status]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Apply panel building highlights whenever selected/hovered egid changes
   useEffect(() => {

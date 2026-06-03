@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import { useMapStore } from '../store/mapStore'
 import type { GwrFeature } from '../api/geoAdmin'
 import type { BuildingMeasurements } from '../utils/buildingMeasurements'
+import { computeSunPosition, dayOfYearToLabel } from '../utils/solarPosition'
+import SunShadowCharts from './SunShadowCharts'
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 
@@ -307,6 +309,105 @@ function MeasurementsModule() {
   )
 }
 
+// ─── Sun & Shadow module ──────────────────────────────────────────────────────
+
+function formatHour(h: number): string {
+  const hh = Math.floor(h)
+  const mm = Math.round((h % 1) * 60)
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`
+}
+
+function SunShadowModule() {
+  const {
+    sunDayOfYear, setSunDayOfYear,
+    sunHourOfDay, setSunHourOfDay,
+    sunSceneCenter,
+  } = useMapStore()
+  const [open, setOpen] = useState(false)
+
+  const { elevation } = sunSceneCenter
+    ? computeSunPosition(sunSceneCenter.lat, sunDayOfYear, sunHourOfDay)
+    : { elevation: 0 }
+
+  const isSunUp = elevation > 0
+  const summary = `${dayOfYearToLabel(sunDayOfYear)} · ${formatHour(sunHourOfDay)}`
+
+  return (
+    <div className="border-b border-white/[0.05]">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center gap-3 px-4 py-3.5 text-left hover:bg-white/[0.03] transition-colors"
+      >
+        <span className="shrink-0 text-white/35"><SunIcon /></span>
+        <div className="flex-1 min-w-0">
+          <p className="text-[12px] text-white/75 font-medium leading-tight">Sun & Shadow</p>
+          <p className="text-[10px] text-white/30 leading-tight mt-0.5">{summary}</p>
+        </div>
+        <ChevronIcon open={open} />
+      </button>
+
+      {open && (
+        <div className="px-4 pb-4 space-y-4">
+          {!sunSceneCenter && (
+            <p className="text-[11px] text-white/20 italic pt-1">
+              Load a 3D scene to enable shadow simulation.
+            </p>
+          )}
+
+          {/* Sliders */}
+          <div className="space-y-3 pt-1">
+            <div>
+              <div className="flex justify-between items-baseline mb-1">
+                <span className="text-[10px] text-white/30">Day of year</span>
+                <span className="text-[10px] text-white/60 font-mono">{dayOfYearToLabel(sunDayOfYear)}</span>
+              </div>
+              <input
+                type="range" min={1} max={365} step={1}
+                value={sunDayOfYear}
+                onChange={e => setSunDayOfYear(Number(e.target.value))}
+                className="w-full h-1 rounded-full appearance-none cursor-pointer bg-white/10 accent-[#00E5FF]"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between items-baseline mb-1">
+                <span className="text-[10px] text-white/30">Time of day</span>
+                <span className="text-[10px] text-white/60 font-mono">
+                  {formatHour(sunHourOfDay)}
+                  {isSunUp
+                    ? <span className="text-[9px] text-amber-400/60 ml-1.5">{elevation.toFixed(1)}°</span>
+                    : <span className="text-[9px] text-white/20 ml-1.5"> below horizon</span>
+                  }
+                </span>
+              </div>
+              <input
+                type="range" min={0} max={24} step={0.25}
+                value={sunHourOfDay}
+                onChange={e => setSunHourOfDay(Number(e.target.value))}
+                className="w-full h-1 rounded-full appearance-none cursor-pointer bg-white/10 accent-[#00E5FF]"
+              />
+              <div className="flex justify-between mt-1 px-px">
+                {[0, 6, 12, 18, 24].map(h => (
+                  <span key={h} className="text-[8px] text-white/15">{h}</span>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Charts */}
+          {sunSceneCenter && (
+            <SunShadowCharts
+              latDeg={sunSceneCenter.lat}
+              dayOfYear={sunDayOfYear}
+              hourOfDay={sunHourOfDay}
+            />
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Generic placeholder module ───────────────────────────────────────────────
 
 type ModuleDef = {
@@ -317,12 +418,6 @@ type ModuleDef = {
 }
 
 const MODULES: ModuleDef[] = [
-  {
-    id: 'sun-shadow',
-    icon: <SunIcon />,
-    title: 'Sun & Shadow',
-    summary: 'Shadow simulation and solar access',
-  },
   {
     id: 'energy',
     icon: <BoltIcon />,
@@ -365,6 +460,7 @@ export default function AnalysisModules() {
       <div className="flex-1 overflow-y-auto">
         <BuildingsModule />
         <MeasurementsModule />
+        <SunShadowModule />
         {MODULES.map(mod => (
           <ModuleCard key={mod.id} mod={mod} />
         ))}
