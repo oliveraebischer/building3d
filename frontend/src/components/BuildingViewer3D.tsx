@@ -51,6 +51,7 @@ export default function BuildingViewer3D() {
     analysisSelectedEgid, analysisHoveredEgid,
     setBuildingMeasurements, clearBuildingMeasurements,
     sunDayOfYear, sunHourOfDay,
+    portfolioSnapshotGeometries, setPortfolioSnapshotGeometries,
   } = useMapStore()
   const [state, setState] = useState<ViewerState>({ status: 'idle' })
   const canvasRef = useRef<HTMLDivElement>(null)
@@ -101,6 +102,17 @@ export default function BuildingViewer3D() {
   // Fetch building geometry + terrain when parcel/buildings change
   useEffect(() => {
     if (!selectedParcel) { setState({ status: 'idle' }); return }
+
+    // Use portfolio snapshot if available (bypasses tile requirement and API fetch)
+    const snapshot = portfolioSnapshotGeometries
+    if (snapshot) {
+      setPortfolioSnapshotGeometries(null)
+      setNeighborData(snapshot.neighbors)
+      const data = snapshot.own
+      setState(data.features.length > 0 ? { status: 'ready', data, terrain: null } : { status: 'empty' })
+      return
+    }
+
     if (downloadedTileIds.size === 0) { setState({ status: 'no-tile' }); return }
 
     const egids = selectedGWRRef.current.map(b => b.egid).filter(e => e !== '—')
@@ -140,7 +152,7 @@ export default function BuildingViewer3D() {
       neighborCacheRef.current.clear()
       fetchingRef.current.clear()
     }
-  }, [selectedParcel?.egrid, downloadedTileIds.size]) // selectedGWR intentionally omitted — use selectedGWRRef.current to avoid store-update re-render loops
+  }, [selectedParcel?.egrid, downloadedTileIds.size]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fill null terrain elevation values with neighbor interpolation before mesh construction.
   // Null cells from geo.admin.ch fall back to min_elevation, creating deep spikes in the mesh.

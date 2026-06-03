@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import maplibregl from 'maplibre-gl'
 import { useMapStore, BASE_LAYERS } from '../store/mapStore'
+import type { PortfolioEntry } from '../store/mapStore'
 import { identifyParcel, findBuildingsByEGRID } from '../api/geoAdmin'
 
 const SWITZERLAND_CENTER: [number, number] = [8.2275, 46.8182]
@@ -23,6 +24,9 @@ export default function MapView() {
           setMapInstance, setLookupParcel,
           setParcelLoading, setParcelResult, clearParcel,
           highlightedTileId } = useMapStore()
+  const portfolio = useMapStore(s => s.portfolio)
+  const portfolioHoveredBuildingEgid = useMapStore(s => s.portfolioHoveredBuildingEgid)
+  const prevHoveredBuildingRef = useRef<string | null>(null)
   const prevHighlightedRef = useRef<string | null>(null)
   const activeLayerRef = useRef<string>('swisstopo-base')
   const pendingSwapRef = useRef<{ cancel: () => void } | null>(null)
@@ -152,6 +156,234 @@ export default function MapView() {
         },
       }, 'parcel-highlight-fill')
 
+      // Portfolio pins + parcel fills — always visible, color-coded by status
+      // Solid colors for the circle pins; transparent for parcel fills/outlines
+      const statusColorSolidExpr = [
+        'match', ['get', 'status'],
+        'watch',           '#C0C0C0',
+        'due-diligence',   '#FBD34D',
+        'active',          '#34D399',
+        'on-hold',         '#FB923C',
+        'divested',        '#8A8A8A',
+        '#C0C0C0',
+      ]
+      const statusColorAlphaExpr = [
+        'match', ['get', 'status'],
+        'watch',           'rgba(200,200,200,0.55)',
+        'due-diligence',   'rgba(251,191,36,0.70)',
+        'active',          'rgba(52,211,153,0.70)',
+        'on-hold',         'rgba(251,146,60,0.70)',
+        'divested',        'rgba(150,150,150,0.35)',
+        'rgba(200,200,200,0.55)',
+      ]
+
+      map.addSource('portfolio-pins', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      })
+      map.addSource('portfolio-parcels', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      })
+
+      map.addLayer({
+        id: 'portfolio-parcels-fill',
+        type: 'fill',
+        source: 'portfolio-parcels',
+        minzoom: 14,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        paint: { 'fill-color': statusColorAlphaExpr as any, 'fill-opacity': 0.13 },
+      }, 'parcel-highlight-fill')
+
+      map.addLayer({
+        id: 'portfolio-parcels-outline',
+        type: 'line',
+        source: 'portfolio-parcels',
+        minzoom: 14,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        paint: { 'line-color': statusColorAlphaExpr as any, 'line-width': 1.5, 'line-opacity': 0.55 },
+      }, 'parcel-highlight-fill')
+
+      // Parcel-level pin — visible at low zoom only (fades out when building pins take over)
+      map.addLayer({
+        id: 'portfolio-pins-circle',
+        type: 'circle',
+        source: 'portfolio-pins',
+        maxzoom: 14,
+        paint: {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 6, 14, 10] as any,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          'circle-color': statusColorSolidExpr as any,
+          'circle-opacity': 1,
+          'circle-stroke-width': 2.5,
+          'circle-stroke-color': '#ffffff',
+          'circle-stroke-opacity': 0.9,
+        },
+      }, 'building-highlight-circle')
+
+      // Building-level pins — one per GWR building, visible when zoomed in (zoom ≥ 14)
+      map.addSource('portfolio-building-pins', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+        promoteId: 'egid',
+      })
+      map.addLayer({
+        id: 'portfolio-building-pins-circle',
+        type: 'circle',
+        source: 'portfolio-building-pins',
+        minzoom: 14,
+        paint: {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 14, 5, 18, 9] as any,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          'circle-color': statusColorSolidExpr as any,
+          'circle-opacity': 1,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          'circle-stroke-width': ['case', ['boolean', ['feature-state', 'hovered'], false], 3.5, 2] as any,
+          'circle-stroke-color': '#ffffff',
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          'circle-stroke-opacity': ['case', ['boolean', ['feature-state', 'hovered'], false], 1, 0.8] as any,
+        },
+      }, 'building-highlight-circle')
+
+      // Dark tooltip style for portfolio pin hover
+      const portfolioPopupStyle = document.createElement('style')
+      portfolioPopupStyle.textContent = `
+        .portfolio-pin-popup .maplibregl-popup-content {
+          background: #141414;
+          color: #fff;
+          padding: 7px 11px;
+          border-radius: 8px;
+          border: 1px solid rgba(255,255,255,0.1);
+          box-shadow: 0 4px 20px rgba(0,0,0,0.55);
+          font-size: 11px;
+          font-family: -apple-system, system-ui, sans-serif;
+          pointer-events: none;
+        }
+        .portfolio-pin-popup .maplibregl-popup-tip { display: none; }
+      `
+      document.head.appendChild(portfolioPopupStyle)
+
+      const portfolioTooltip = new maplibregl.Popup({
+        closeButton: false,
+        closeOnClick: false,
+        className: 'portfolio-pin-popup',
+        offset: [0, -16],
+        maxWidth: 'none',
+      })
+
+      const PIN_STATUS_LABELS: Record<string, string> = {
+        'watch': 'Watch', 'due-diligence': 'Due Diligence',
+        'active': 'Active', 'on-hold': 'On Hold', 'divested': 'Divested',
+      }
+
+      map.on('mouseenter', 'portfolio-pins-circle', (e) => {
+        map.getCanvas().style.cursor = 'pointer'
+        const feat = e.features?.[0]
+        if (!feat) return
+        const { label, egrid, status } = feat.properties as { label: string; egrid: string; status: string }
+        const displayLabel = label || egrid
+        const statusLabel = PIN_STATUS_LABELS[status] ?? status
+        portfolioTooltip
+          .setLngLat((feat.geometry as GeoJSON.Point).coordinates as [number, number])
+          .setHTML(`<div style="font-weight:600;margin-bottom:3px">${displayLabel}</div><div style="color:rgba(255,255,255,0.4);font-size:9px;letter-spacing:0.06em;text-transform:uppercase">${statusLabel}</div>`)
+          .addTo(map)
+      })
+
+      map.on('mouseleave', 'portfolio-pins-circle', () => {
+        map.getCanvas().style.cursor = ''
+        portfolioTooltip.remove()
+      })
+
+      map.on('click', 'portfolio-pins-circle', (e) => {
+        const egrid = e.features?.[0]?.properties?.egrid as string | undefined
+        if (!egrid) return
+        portfolioTooltip.remove()
+        useMapStore.getState().setPortfolioPinClickedEgrid(egrid)
+      })
+
+      const portfolioCentroid = (poly: GeoJSON.Polygon): [number, number] => {
+        const pts = poly.coordinates.flat() as [number, number][]
+        return [pts.reduce((s, c) => s + c[0], 0) / pts.length, pts.reduce((s, c) => s + c[1], 0) / pts.length]
+      }
+
+      const updatePortfolioPins = (entries: PortfolioEntry[]) => {
+        try {
+          const pinsSource = map.getSource('portfolio-pins') as maplibregl.GeoJSONSource | undefined
+          const parcelsSource = map.getSource('portfolio-parcels') as maplibregl.GeoJSONSource | undefined
+          const buildingPinsSource = map.getSource('portfolio-building-pins') as maplibregl.GeoJSONSource | undefined
+          if (!pinsSource || !parcelsSource || !buildingPinsSource) return
+          pinsSource.setData({
+            type: 'FeatureCollection',
+            features: entries.map(e => ({
+              type: 'Feature' as const,
+              geometry: { type: 'Point' as const, coordinates: portfolioCentroid(e.parcel.geometry) },
+              properties: { egrid: e.parcel.egrid, status: e.status ?? 'watch', label: e.label ?? '' },
+            })),
+          })
+          parcelsSource.setData({
+            type: 'FeatureCollection',
+            features: entries.map(e => ({
+              type: 'Feature' as const,
+              geometry: e.parcel.geometry,
+              properties: { egrid: e.parcel.egrid, status: e.status ?? 'watch', label: e.label ?? '' },
+            })),
+          })
+          buildingPinsSource.setData({
+            type: 'FeatureCollection',
+            features: entries.flatMap(e =>
+              e.buildings
+                .filter(b => b.geometry !== null && b.egid !== '—')
+                .map(b => ({
+                  type: 'Feature' as const,
+                  geometry: b.geometry as GeoJSON.Point,
+                  properties: {
+                    egid: b.egid,
+                    egrid: e.parcel.egrid,
+                    status: e.status ?? 'watch',
+                    address: b.address !== '—' ? b.address : '',
+                    label: e.label ?? '',
+                  },
+                }))
+            ),
+          })
+        } catch { /* map may be destroyed during HMR */ }
+      }
+
+      // Building pin interactions (tooltip + hover state + click)
+      map.on('mouseenter', 'portfolio-building-pins-circle', (e) => {
+        map.getCanvas().style.cursor = 'pointer'
+        const feat = e.features?.[0]
+        if (!feat) return
+        const { address, label, egrid, status, egid } = feat.properties as Record<string, string>
+        const displayLabel = address || label || egrid
+        const statusLabel = PIN_STATUS_LABELS[status] ?? status
+        portfolioTooltip
+          .setLngLat((feat.geometry as GeoJSON.Point).coordinates as [number, number])
+          .setHTML(`<div style="font-weight:600;margin-bottom:3px">${displayLabel}</div><div style="color:rgba(255,255,255,0.4);font-size:9px;letter-spacing:0.06em;text-transform:uppercase">${statusLabel}</div>`)
+          .addTo(map)
+        if (egid) useMapStore.getState().setPortfolioHoveredBuildingEgid(egid)
+      })
+
+      map.on('mouseleave', 'portfolio-building-pins-circle', () => {
+        map.getCanvas().style.cursor = ''
+        portfolioTooltip.remove()
+        useMapStore.getState().setPortfolioHoveredBuildingEgid(null)
+      })
+
+      map.on('click', 'portfolio-building-pins-circle', (e) => {
+        const props = e.features?.[0]?.properties as Record<string, string> | undefined
+        if (!props?.egrid) return
+        portfolioTooltip.remove()
+        useMapStore.getState().setPortfolioPinClickedEgrid(props.egrid)
+      })
+
+      useMapStore.getState().setPortfolioPinsFn(updatePortfolioPins)
+      updatePortfolioPins(useMapStore.getState().portfolio)
+      // Stored for cleanup
+      ;(map as unknown as Record<string, unknown>)._portfolioPopupStyle = portfolioPopupStyle
+
       // Tile grid interaction
       let hoveredTileId: string | null = null
 
@@ -269,6 +501,14 @@ export default function MapView() {
 
     return () => {
       clearParcel()
+      useMapStore.getState().setPortfolioPinsFn(null)
+      ;((map as unknown as Record<string, unknown>)._portfolioPopupStyle as HTMLStyleElement | undefined)?.remove()
+      for (const id of ['portfolio-building-pins-circle', 'portfolio-pins-circle', 'portfolio-parcels-fill', 'portfolio-parcels-outline']) {
+        if (map.getLayer(id)) map.removeLayer(id)
+      }
+      for (const id of ['portfolio-building-pins', 'portfolio-pins', 'portfolio-parcels']) {
+        if (map.getSource(id)) map.removeSource(id)
+      }
       map.remove()
       mapRef.current = null
       mapReadyRef.current = false
@@ -402,6 +642,24 @@ export default function MapView() {
     if (mapReadyRef.current) apply()
     else map?.once('load', apply)
   }, [dataMode])
+
+  // Keep portfolio pins + parcel fills in sync whenever portfolio changes
+  useEffect(() => {
+    useMapStore.getState().portfolioPinsFn?.(portfolio)
+  }, [portfolio])
+
+  // Sync portfolio building hover → map feature state
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapReadyRef.current) return
+    if (prevHoveredBuildingRef.current) {
+      try { map.setFeatureState({ source: 'portfolio-building-pins', id: prevHoveredBuildingRef.current }, { hovered: false }) } catch { /* source may not exist yet */ }
+    }
+    if (portfolioHoveredBuildingEgid) {
+      try { map.setFeatureState({ source: 'portfolio-building-pins', id: portfolioHoveredBuildingEgid }, { hovered: true }) } catch { /* ok */ }
+    }
+    prevHoveredBuildingRef.current = portfolioHoveredBuildingEgid
+  }, [portfolioHoveredBuildingEgid])
 
   return <div ref={mapContainer} className="absolute inset-0" />
 }

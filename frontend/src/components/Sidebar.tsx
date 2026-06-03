@@ -104,12 +104,15 @@ export default function Sidebar() {
     setParcelResult, parcelHighlightFn,
     portfolio, portfolioHighlightFn,
     sidebarResizing, setSidebarResizing,
+    portfolioPinClickedEgrid,
   } = useMapStore()
 
   const searchBarRef = useRef<SearchBarHandle>(null)
   const isDragging = useRef(false)
   const [settingsMode, setSettingsMode] = useState(false)
   const [portfolioMode, setPortfolioMode] = useState(false)
+  const portfolioModeRef = useRef(portfolioMode)
+  portfolioModeRef.current = portfolioMode
   const [recentSearches, setRecentSearches] = useState<SearchSelectEntry[]>(() => loadRecent())
 
   const handleSearchSelect = useCallback((entry: SearchSelectEntry) => {
@@ -267,6 +270,13 @@ export default function Sidebar() {
       searchBarRef.current?.focus()
     }
   }
+
+  // ── Open portfolio mode when a map pin is clicked ─────────────────────────
+  useEffect(() => {
+    if (!portfolioPinClickedEgrid) return
+    if (portfolioModeRef.current) return // already open — PortfolioPanel handles scroll
+    handlePortfolioClick()
+  }, [portfolioPinClickedEgrid]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Separator drag ────────────────────────────────────────────────────────
   const onSeparatorMouseDown = useCallback(() => {

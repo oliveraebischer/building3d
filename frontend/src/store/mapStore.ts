@@ -4,11 +4,24 @@ import type { ParcelFeature, GwrFeature } from '../api/geoAdmin'
 import { downloadTile as apiDownloadTile } from '../api/tiles'
 import type { TileGridFeature } from '../api/tiles'
 import type { BuildingMeasurements } from '../utils/buildingMeasurements'
+import type { BuildingFeatureCollection } from '../api/buildings'
+
+export type PortfolioStatus = 'watch' | 'due-diligence' | 'active' | 'on-hold' | 'divested'
+
+export type PortfolioSnapshot = {
+  buildingGeometries: BuildingFeatureCollection
+  neighborGeometries: BuildingFeatureCollection
+  snapshotAt: string
+}
 
 export type PortfolioEntry = {
   parcel: ParcelFeature
   buildings: GwrFeature[]
   addedAt: string
+  label?: string
+  status?: PortfolioStatus
+  notes?: string
+  snapshot?: PortfolioSnapshot
 }
 
 const PORTFOLIO_KEY = 'building3d_portfolio'
@@ -97,8 +110,18 @@ type MapState = {
   portfolio: PortfolioEntry[]
   addToPortfolio: (entry: PortfolioEntry) => void
   removeFromPortfolio: (egrid: string) => void
+  updatePortfolioEntry: (egrid: string, patch: Partial<Pick<PortfolioEntry, 'label' | 'status' | 'notes'>>) => void
+  savePortfolioSnapshot: (egrid: string, snapshot: PortfolioSnapshot) => void
   portfolioHighlightFn: ((geoms: GeoJSON.Polygon[]) => void) | null
   setPortfolioHighlightFn: (fn: (geoms: GeoJSON.Polygon[]) => void) => void
+  portfolioSnapshotGeometries: { own: BuildingFeatureCollection; neighbors: BuildingFeatureCollection } | null
+  setPortfolioSnapshotGeometries: (g: { own: BuildingFeatureCollection; neighbors: BuildingFeatureCollection } | null) => void
+  portfolioPinsFn: ((entries: PortfolioEntry[]) => void) | null
+  setPortfolioPinsFn: (fn: ((entries: PortfolioEntry[]) => void) | null) => void
+  portfolioPinClickedEgrid: string | null
+  setPortfolioPinClickedEgrid: (egrid: string | null) => void
+  portfolioHoveredBuildingEgid: string | null
+  setPortfolioHoveredBuildingEgid: (egid: string | null) => void
   // Analysis panel ↔ 3D viewer building highlight
   analysisSelectedEgid: number | null
   setAnalysisSelectedEgid: (id: number | null) => void
@@ -195,8 +218,26 @@ export const useMapStore = create<MapState>((set, get) => ({
     savePortfolio(next)
     return { portfolio: next }
   }),
+  updatePortfolioEntry: (egrid, patch) => set((s) => {
+    const next = s.portfolio.map(e => e.parcel.egrid === egrid ? { ...e, ...patch } : e)
+    savePortfolio(next)
+    return { portfolio: next }
+  }),
+  savePortfolioSnapshot: (egrid, snapshot) => set((s) => {
+    const next = s.portfolio.map(e => e.parcel.egrid === egrid ? { ...e, snapshot } : e)
+    savePortfolio(next)
+    return { portfolio: next }
+  }),
   portfolioHighlightFn: null,
   setPortfolioHighlightFn: (fn) => set({ portfolioHighlightFn: fn }),
+  portfolioSnapshotGeometries: null,
+  setPortfolioSnapshotGeometries: (g) => set({ portfolioSnapshotGeometries: g }),
+  portfolioPinsFn: null,
+  setPortfolioPinsFn: (fn) => set({ portfolioPinsFn: fn }),
+  portfolioPinClickedEgrid: null,
+  setPortfolioPinClickedEgrid: (egrid) => set({ portfolioPinClickedEgrid: egrid }),
+  portfolioHoveredBuildingEgid: null,
+  setPortfolioHoveredBuildingEgid: (egid) => set({ portfolioHoveredBuildingEgid: egid }),
   analysisSelectedEgid: null,
   setAnalysisSelectedEgid: (id) => set({ analysisSelectedEgid: id }),
   analysisHoveredEgid: null,

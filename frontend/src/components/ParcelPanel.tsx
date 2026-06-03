@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useMapStore } from '../store/mapStore'
-import type { PortfolioEntry } from '../store/mapStore'
+import type { PortfolioEntry, PortfolioStatus } from '../store/mapStore'
 import type { GwrFeature } from '../api/geoAdmin'
+import { fetchBuildings, fetchNeighborBuildings } from '../api/buildings'
+import type { BuildingFeatureCollection } from '../api/buildings'
 
 function Row({ label, value }: { label: string; value: string | number | null | undefined }) {
   if (value == null || value === '—' || value === '') return null
@@ -48,18 +50,22 @@ function ChevronIcon({ open }: { open: boolean }) {
 export default function ParcelPanel() {
   const { parcelLoading, selectedParcel, selectedGWR, parcelError,
           clearParcel, clearHighlight, setHighlightBuilding, mapInstance,
-          portfolio, addToPortfolio, removeFromPortfolio,
-          setAnalysisMode, setSidebarCollapsed } = useMapStore()
+          portfolio, addToPortfolio, removeFromPortfolio, savePortfolioSnapshot,
+          setAnalysisMode } = useMapStore()
   const [expandedEgids, setExpandedEgids] = useState<Set<string>>(new Set())
 
-  // Portfolio add state: 'idle' | 'selecting' | 'done'
-  const [portfolioState, setPortfolioState] = useState<'idle' | 'selecting' | 'done'>('idle')
+  // Portfolio add state: 'idle' | 'selecting' | 'labeling' | 'done'
+  const [portfolioState, setPortfolioState] = useState<'idle' | 'selecting' | 'labeling' | 'done'>('idle')
   const [checkedEgids, setCheckedEgids] = useState<Set<string>>(new Set())
+  const [pendingBuildings, setPendingBuildings] = useState<GwrFeature[]>([])
+  const [entryLabel, setEntryLabel] = useState('')
+  const [entryStatus, setEntryStatus] = useState<PortfolioStatus>('watch')
 
   // Reset portfolio UI when parcel changes
   useEffect(() => {
     setPortfolioState('idle')
     setCheckedEgids(new Set())
+    setPendingBuildings([])
   }, [selectedParcel?.egrid])
 
   // Reflect existing portfolio membership
@@ -69,19 +75,54 @@ export default function ParcelPanel() {
     setPortfolioState(inPortfolio ? 'done' : 'idle')
   }, [selectedParcel?.egrid, portfolio])
 
-  const confirmAdd = (buildings: GwrFeature[]) => {
+  const goToLabeling = (buildings: GwrFeature[]) => {
+    const firstAddr = buildings[0]?.address
+    setEntryLabel(firstAddr && firstAddr !== '—' ? firstAddr : '')
+    setEntryStatus('watch')
+    setPendingBuildings(buildings)
+    setPortfolioState('labeling')
+  }
+
+  const confirmAdd = () => {
     if (!selectedParcel) return
-    const entry: PortfolioEntry = { parcel: selectedParcel, buildings, addedAt: new Date().toISOString() }
+    const egrid = selectedParcel.egrid
+    const entry: PortfolioEntry = {
+      parcel: selectedParcel,
+      buildings: pendingBuildings,
+      addedAt: new Date().toISOString(),
+      label: entryLabel.trim() || undefined,
+      status: entryStatus,
+    }
     addToPortfolio(entry)
     setPortfolioState('done')
     setCheckedEgids(new Set())
+    setPendingBuildings([])
+
+    // Async snapshot capture — runs in background after entry is created
+    const egids = pendingBuildings.map(b => b.egid).filter(e => e !== '—')
+    const coords = (selectedParcel.geometry.coordinates as [number, number][][]).flat()
+    const lngs = coords.map(c => c[0]), lats = coords.map(c => c[1])
+    const bbox: [number, number, number, number] = [Math.min(...lngs), Math.min(...lats), Math.max(...lngs), Math.max(...lats)]
+    const pad = 1.0
+    const nBbox: [number, number, number, number] = [
+      bbox[0] - (bbox[2] - bbox[0]) * pad, bbox[1] - (bbox[3] - bbox[1]) * pad,
+      bbox[2] + (bbox[2] - bbox[0]) * pad, bbox[3] + (bbox[3] - bbox[1]) * pad,
+    ]
+    const empty: BuildingFeatureCollection = { type: 'FeatureCollection', features: [] }
+    Promise.all([
+      egids.length > 0 ? fetchBuildings(egids, bbox) : Promise.resolve(empty),
+      fetchNeighborBuildings(nBbox).catch(() => empty),
+    ]).then(([buildingGeometries, neighborGeometries]) => {
+      savePortfolioSnapshot(egrid, { buildingGeometries, neighborGeometries, snapshotAt: new Date().toISOString() })
+    }).catch(() => { /* silent fail — snapshot unavailable */ })
   }
 
   const handleAddClick = () => {
     if (selectedGWR.length <= 1) {
-      confirmAdd(selectedGWR)
+      goToLabeling(selectedGWR)
     } else {
       setCheckedEgids(new Set(selectedGWR.map((b, i) => b.egid !== '—' ? b.egid : String(i))))
+      setPendingBuildings([])
       setPortfolioState('selecting')
     }
   }
@@ -260,7 +301,7 @@ export default function ParcelPanel() {
                 </div>
                 <div className="flex gap-2">
                   <button
-                    onClick={() => confirmAdd(selectedGWR)}
+                    onClick={() => goToLabeling(selectedGWR)}
                     className="text-[10px] text-white/40 hover:text-white/70 transition-colors"
                   >
                     Add all
@@ -270,19 +311,69 @@ export default function ParcelPanel() {
                       const selected = selectedGWR.filter((b, i) =>
                         checkedEgids.has(b.egid !== '—' ? b.egid : String(i))
                       )
-                      if (selected.length > 0) confirmAdd(selected)
+                      if (selected.length > 0) goToLabeling(selected)
                     }}
                     disabled={checkedEgids.size === 0}
                     className="flex-1 px-2 py-1 rounded-md bg-accent/10 text-accent text-[10px] font-semibold
                                hover:bg-accent/20 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                   >
-                    Confirm
+                    Next
                   </button>
                   <button
                     onClick={() => setPortfolioState('idle')}
                     className="text-[10px] text-white/30 hover:text-white/60 transition-colors"
                   >
                     Cancel
+                  </button>
+                </div>
+              </div>
+            ) : portfolioState === 'labeling' ? (
+              <div className="space-y-2">
+                <p className="text-[9px] font-bold tracking-widest uppercase text-white/30">
+                  Add to Portfolio
+                </p>
+                <input
+                  type="text"
+                  value={entryLabel}
+                  onChange={e => setEntryLabel(e.target.value)}
+                  placeholder="Label (optional)"
+                  className="w-full bg-white/[0.05] border border-white/[0.08] rounded-md px-2.5 py-1.5
+                             text-[11px] text-white/80 placeholder-white/20 outline-none
+                             focus:border-accent/40 transition-colors"
+                />
+                <div className="flex flex-wrap gap-1">
+                  {(['watch', 'due-diligence', 'active', 'on-hold'] as PortfolioStatus[]).map(s => {
+                    const labels: Record<PortfolioStatus, string> = {
+                      watch: 'Watch', 'due-diligence': 'Due Dil.', active: 'Active', 'on-hold': 'On Hold', divested: 'Divested',
+                    }
+                    return (
+                      <button
+                        key={s}
+                        onClick={() => setEntryStatus(s)}
+                        className={`px-2 py-0.5 rounded text-[9px] font-medium transition-colors ${
+                          entryStatus === s
+                            ? 'bg-accent/20 text-accent'
+                            : 'bg-white/[0.05] text-white/30 hover:bg-white/10 hover:text-white/50'
+                        }`}
+                      >
+                        {labels[s]}
+                      </button>
+                    )
+                  })}
+                </div>
+                <div className="flex gap-2 pt-0.5">
+                  <button
+                    onClick={() => setPortfolioState('idle')}
+                    className="text-[10px] text-white/30 hover:text-white/60 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={confirmAdd}
+                    className="flex-1 px-2 py-1 rounded-md bg-accent/10 text-accent text-[10px] font-semibold
+                               hover:bg-accent/20 transition-colors"
+                  >
+                    Save to Portfolio
                   </button>
                 </div>
               </div>
@@ -304,7 +395,7 @@ export default function ParcelPanel() {
           {/* Analysis entry */}
           <div className="px-4 py-3 border-b border-white/[0.06]">
             <button
-              onClick={() => { setSidebarCollapsed(true); setAnalysisMode(true) }}
+              onClick={() => setAnalysisMode(true)}
               className="w-full py-2 rounded-lg bg-accent text-[#0d0d0d] text-[12px] font-bold
                          tracking-wide hover:bg-accent/90 active:scale-[0.98] transition-all"
             >
