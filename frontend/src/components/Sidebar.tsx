@@ -1,6 +1,5 @@
 import { useRef, useState, useCallback, useEffect } from 'react'
 import SearchBar, { type SearchBarHandle, type SearchSelectEntry } from './SearchBar'
-import DataPanel from './DataPanel'
 import SettingsPanel from './SettingsPanel'
 import PortfolioPanel from './PortfolioPanel'
 import { useMapStore } from '../store/mapStore'
@@ -48,17 +47,6 @@ function GearIcon() {
   )
 }
 
-function GridIcon() {
-  return (
-    <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2}
-      strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
-      <rect x="3" y="3" width="7" height="7" rx="1" />
-      <rect x="14" y="3" width="7" height="7" rx="1" />
-      <rect x="3" y="14" width="7" height="7" rx="1" />
-      <rect x="14" y="14" width="7" height="7" rx="1" />
-    </svg>
-  )
-}
 
 function BriefcaseIcon() {
   return (
@@ -95,7 +83,7 @@ export default function Sidebar() {
   const {
     sidebarCollapsed, setSidebarCollapsed,
     sidebarWidth, setSidebarWidth,
-    dataMode, setDataMode,
+    setDataMode,
     activeBaseLayerId, setActiveBaseLayer,
     mapInstance,
     lookupParcel,
@@ -116,17 +104,17 @@ export default function Sidebar() {
   const [recentSearches, setRecentSearches] = useState<SearchSelectEntry[]>(() => loadRecent())
 
   const handleSearchSelect = useCallback((entry: SearchSelectEntry) => {
-    if (dataMode) handleDataClick()
+    if (settingsMode) handleSettingsClick()
     setRecentSearches(prev => {
       const filtered = prev.filter(r => r.label !== entry.label)
       const next = [entry, ...filtered].slice(0, MAX_RECENT)
       saveRecent(next)
       return next
     })
-  }, [dataMode]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [settingsMode]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleRecentClick = useCallback((entry: SearchSelectEntry) => {
-    if (dataMode) handleDataClick()
+    if (settingsMode) handleSettingsClick()
     if (!mapInstance) return
     const isAddress = entry.origin === 'address'
     const targetZoom = isAddress ? ADDRESS_ZOOM : entry.zoomlevel
@@ -134,7 +122,7 @@ export default function Sidebar() {
     if (isAddress) {
       mapInstance.once('moveend', () => lookupParcel?.(entry.lon, entry.lat, true))
     }
-  }, [dataMode, mapInstance, lookupParcel]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [settingsMode, mapInstance, lookupParcel]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Data mode save/restore refs
   const prevLayerRef = useRef(activeBaseLayerId)
@@ -151,17 +139,39 @@ export default function Sidebar() {
     mapInstance.easeTo({ padding: { ...PAD_NONE, left: w + SEPARATOR_W }, duration: 0 })
   }, [mapInstance]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Data mode toggle ──────────────────────────────────────────────────────
-  const handleDataClick = () => {
-    if (!dataMode) {
+  // ── Settings mode toggle (includes data mode) ─────────────────────────────
+  const handleSettingsClick = () => {
+    if (settingsMode) {
+      const zoomToRestore = prevZoomRef.current
+      const widthToRestore = prevSidebarWidthRef.current
+      prevZoomRef.current = null
+
+      if (mapInstance) setCadastral(mapInstance, true)
+      setActiveBaseLayer(prevLayerRef.current)
+
+      if (prevParcelRef.current) {
+        setParcelResult(prevParcelRef.current, prevGWRRef.current)
+        parcelHighlightFn?.(prevParcelRef.current.geometry)
+      }
+
+      setSidebarWidth(widthToRestore)
+      setDataMode(false)
+      setSettingsMode(false)
+
+      mapInstance?.easeTo({
+        padding: { ...PAD_NONE, left: widthToRestore + SEPARATOR_W },
+        ...(prevCenterRef.current ? { center: prevCenterRef.current } : {}),
+        ...(zoomToRestore !== null ? { zoom: zoomToRestore } : {}),
+        duration: 500,
+      })
+    } else {
+      if (portfolioMode) { clearHighlight?.(); setPortfolioMode(false) }
+      if (!portfolioMode) prevSidebarWidthRef.current = sidebarWidth
+
       prevLayerRef.current = activeBaseLayerId
       prevCenterRef.current = mapInstance?.getCenter() ?? null
       prevParcelRef.current = selectedParcel
       prevGWRRef.current = selectedGWR
-      // Don't overwrite the saved width when switching from another panel — it already holds the pre-panel value
-      if (!settingsMode && !portfolioMode) prevSidebarWidthRef.current = sidebarWidth
-      setSettingsMode(false)
-      setPortfolioMode(false)
 
       setSidebarCollapsed(false)
       setSidebarWidth(DATA_W)
@@ -181,48 +191,7 @@ export default function Sidebar() {
       clearHighlight?.()
       clearParcel()
       setDataMode(true)
-    } else {
-      const zoomToRestore = prevZoomRef.current
-      const widthToRestore = prevSidebarWidthRef.current
-      prevZoomRef.current = null
-
-      if (mapInstance) setCadastral(mapInstance, true)
-      setActiveBaseLayer(prevLayerRef.current)
-
-      if (prevParcelRef.current) {
-        setParcelResult(prevParcelRef.current, prevGWRRef.current)
-        parcelHighlightFn?.(prevParcelRef.current.geometry)
-      }
-
-      setSidebarWidth(widthToRestore)
-      setDataMode(false)
-
-      mapInstance?.easeTo({
-        padding: { ...PAD_NONE, left: widthToRestore + SEPARATOR_W },
-        ...(prevCenterRef.current ? { center: prevCenterRef.current } : {}),
-        ...(zoomToRestore !== null ? { zoom: zoomToRestore } : {}),
-        duration: 500,
-      })
-    }
-  }
-
-  // ── Settings mode toggle ──────────────────────────────────────────────────
-  const handleSettingsClick = () => {
-    if (settingsMode) {
-      const widthToRestore = prevSidebarWidthRef.current
-      setSidebarWidth(widthToRestore)
-      setSettingsMode(false)
-      mapInstance?.easeTo({ padding: { ...PAD_NONE, left: widthToRestore + SEPARATOR_W }, duration: 500 })
-    } else {
-      // Exit other modes first; prevSidebarWidthRef already holds pre-panel value when coming from one
-      if (dataMode) handleDataClick()
-      if (portfolioMode) { clearHighlight?.(); setPortfolioMode(false) }
-      // Only save width when coming from normal mode
-      if (!dataMode && !portfolioMode) prevSidebarWidthRef.current = sidebarWidth
-      setSidebarCollapsed(false)
-      setSidebarWidth(DATA_W)
       setSettingsMode(true)
-      mapInstance?.easeTo({ padding: { ...PAD_NONE, left: DATA_W + SEPARATOR_W }, duration: 300 })
     }
   }
 
@@ -235,9 +204,8 @@ export default function Sidebar() {
       setPortfolioMode(false)
       mapInstance?.easeTo({ padding: { ...PAD_NONE, left: widthToRestore + SEPARATOR_W }, duration: 500 })
     } else {
-      if (dataMode) handleDataClick()
-      if (settingsMode) { setSidebarWidth(prevSidebarWidthRef.current); setSettingsMode(false) }
-      if (!dataMode && !settingsMode) prevSidebarWidthRef.current = sidebarWidth
+      if (settingsMode) handleSettingsClick()
+      if (!settingsMode) prevSidebarWidthRef.current = sidebarWidth
       setSidebarCollapsed(false)
       setSidebarWidth(DATA_W)
       setPortfolioMode(true)
@@ -360,18 +328,6 @@ export default function Sidebar() {
             </button>
 
             <button
-              onClick={handleDataClick}
-              className={`w-9 h-9 flex items-center justify-center rounded-lg transition-colors ${
-                dataMode
-                  ? 'bg-white text-[#0d0d0d]'
-                  : 'text-white/35 hover:text-white hover:bg-white/[0.06]'
-              }`}
-              aria-label="Data"
-            >
-              <GridIcon />
-            </button>
-
-            <button
               onClick={handleSettingsClick}
               className={`w-9 h-9 flex items-center justify-center rounded-lg transition-colors ${
                 settingsMode
@@ -450,24 +406,6 @@ export default function Sidebar() {
 
             {/* Portfolio panel — inline below Portfolio button */}
             {portfolioMode && <PortfolioPanel />}
-
-            {/* Data button */}
-            <div className="shrink-0 border-t border-white/[0.07] px-3 pt-2 pb-1.5">
-              <button
-                onClick={handleDataClick}
-                className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold tracking-wide transition-colors ${
-                  dataMode
-                    ? 'bg-white text-[#0d0d0d]'
-                    : 'border border-white/[0.08] text-white/50 hover:border-white/20 hover:text-white/80'
-                }`}
-              >
-                <GridIcon />
-                Data
-              </button>
-            </div>
-
-            {/* Data panel — inline between Data and Settings buttons */}
-            {dataMode && <DataPanel />}
 
             {/* Settings button */}
             <div className="shrink-0 border-t border-white/[0.07] px-3 pt-1.5 pb-3">
