@@ -2,6 +2,8 @@
 
 Swiss building data explorer — ingests CSV, XLSX, GDB, GeoJSON, Shapefile and renders 2D/3D features on a map.
 
+**GitHub:** https://github.com/oliveraebischer/building3d
+
 ## Project structure
 
 ```
@@ -69,7 +71,7 @@ All spatial data returned by the backend must be in **WGS84 (EPSG:4326)**.
 
 ## SwissBUILDINGS3D 3.0 tile downloader
 
-Data mode (top-right "Data" button) activates a tile grid over Switzerland.
+Data mode (Settings panel) activates a tile grid over Switzerland.
 
 ### STAC API
 - Collection: `ch.swisstopo.swissbuildings3d_3_0`
