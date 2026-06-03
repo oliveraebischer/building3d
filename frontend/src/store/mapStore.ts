@@ -113,8 +113,6 @@ type MapState = {
   setSunDayOfYear: (d: number) => void
   sunHourOfDay: number
   setSunHourOfDay: (h: number) => void
-  sunSceneCenter: { lon: number; lat: number } | null
-  setSunSceneCenter: (c: { lon: number; lat: number } | null) => void
 }
 
 export const useMapStore = create<MapState>((set, get) => ({
@@ -210,6 +208,4 @@ export const useMapStore = create<MapState>((set, get) => ({
   setSunDayOfYear: (d) => set({ sunDayOfYear: d }),
   sunHourOfDay: 12.0,
   setSunHourOfDay: (h) => set({ sunHourOfDay: h }),
-  sunSceneCenter: null,
-  setSunSceneCenter: (c) => set({ sunSceneCenter: c }),
 }))

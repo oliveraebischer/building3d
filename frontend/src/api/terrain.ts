@@ -10,7 +10,7 @@ export async function fetchTerrain(
   grid = 16,
 ): Promise<TerrainGrid> {
   const params = new URLSearchParams({ bbox: bbox.join(','), grid: String(grid) })
-  const res = await fetch(`/api/terrain?${params}`)
+  const res = await fetch(`/api/terrain?${params}`, { signal: AbortSignal.timeout(25_000) })
   if (!res.ok) throw new Error(`${res.status}`)
   return res.json()
 }

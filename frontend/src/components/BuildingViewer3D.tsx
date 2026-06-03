@@ -50,7 +50,7 @@ export default function BuildingViewer3D() {
     selectedParcel, selectedGWR, downloadedTileIds,
     analysisSelectedEgid, analysisHoveredEgid,
     setBuildingMeasurements, clearBuildingMeasurements,
-    sunDayOfYear, sunHourOfDay, setSunSceneCenter,
+    sunDayOfYear, sunHourOfDay,
   } = useMapStore()
   const [state, setState] = useState<ViewerState>({ status: 'idle' })
   const canvasRef = useRef<HTMLDivElement>(null)
@@ -88,6 +88,7 @@ export default function BuildingViewer3D() {
 
   // Refs for panel ↔ 3D viewer building highlight
   const dirLightRef             = useRef<THREE.DirectionalLight | null>(null)
+  const rendererRef             = useRef<THREE.WebGLRenderer | null>(null)
   const meshByEgidRef           = useRef<Map<number, THREE.Mesh>>(new Map())
   const defaultMatRef           = useRef<THREE.MeshPhongMaterial | null>(null)
   const highlightMatRef         = useRef<THREE.MeshPhongMaterial | null>(null)
@@ -102,7 +103,7 @@ export default function BuildingViewer3D() {
     if (!selectedParcel) { setState({ status: 'idle' }); return }
     if (downloadedTileIds.size === 0) { setState({ status: 'no-tile' }); return }
 
-    const egids = selectedGWR.map(b => b.egid).filter(e => e !== '—')
+    const egids = selectedGWRRef.current.map(b => b.egid).filter(e => e !== '—')
     if (egids.length === 0) { setState({ status: 'empty' }); return }
 
     const coords = (selectedParcel.geometry.coordinates as [number, number][][]).flat()
@@ -139,7 +140,33 @@ export default function BuildingViewer3D() {
       neighborCacheRef.current.clear()
       fetchingRef.current.clear()
     }
-  }, [selectedParcel?.egrid, selectedGWR, downloadedTileIds.size]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedParcel?.egrid, downloadedTileIds.size]) // selectedGWR intentionally omitted — use selectedGWRRef.current to avoid store-update re-render loops
+
+  // Fill null terrain elevation values with neighbor interpolation before mesh construction.
+  // Null cells from geo.admin.ch fall back to min_elevation, creating deep spikes in the mesh.
+  function fillNullElevations(raw: (number | null)[][], minElev: number): number[][] {
+    const rows = raw.length, cols = raw[0]?.length ?? 0
+    const grid: (number | null)[][] = raw.map(r => [...r])
+    const allValid = grid.flat().filter((v): v is number => v !== null)
+    if (allValid.length === 0) return grid.map(r => r.map(() => minElev)) as number[][]
+    const sorted = [...allValid].sort((a, b) => a - b)
+    const median = sorted[Math.floor(sorted.length / 2)]
+    // 4 passes of cardinal-neighbor averaging to propagate values inward
+    for (let pass = 0; pass < 4; pass++) {
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          if (grid[r][c] !== null) continue
+          const nbrs: number[] = []
+          for (const [dr, dc] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+            const v = grid[r + dr]?.[c + dc]
+            if (v !== null && v !== undefined) nbrs.push(v)
+          }
+          if (nbrs.length > 0) grid[r][c] = nbrs.reduce((a, b) => a + b, 0) / nbrs.length
+        }
+      }
+    }
+    return grid.map(r => r.map(v => v ?? median)) as number[][]
+  }
 
   // Three.js scene — only when data is ready
   useEffect(() => {
@@ -157,6 +184,9 @@ export default function BuildingViewer3D() {
     renderer.setPixelRatio(window.devicePixelRatio)
     renderer.shadowMap.enabled = true
     renderer.shadowMap.type = THREE.PCFSoftShadowMap
+    renderer.shadowMap.autoUpdate = false  // only update when sun moves
+    renderer.shadowMap.needsUpdate = true  // initial render
+    rendererRef.current = renderer
     container.appendChild(renderer.domElement)
 
     scene.add(new THREE.AmbientLight(0xffffff, 0.5))
@@ -203,7 +233,6 @@ export default function BuildingViewer3D() {
       ? lv95ToWgs84(...terrainCenterLv95)
       : [cx, cy]
     sceneCenterRef.current = { lon: originLon, lat: originLat }
-    setSunSceneCenter({ lon: originLon, lat: originLat })
     const cosLat = Math.cos(originLat * Math.PI / 180)
     const toLocal = (lng: number, lat: number, z: number): [number, number, number] => [
       (lng - originLon) * cosLat * 111320,
@@ -287,6 +316,8 @@ export default function BuildingViewer3D() {
     // LV95 is metric: E-centerE→X, elev-minZ→Y, -(N-centerN)→Z
     let terrainMesh: THREE.Mesh | null = null
     let terrainMat: THREE.MeshLambertMaterial | null = null
+    // Null-filled elevation grid — hoisted so terrainHeightAt can reference it
+    let filledElevations: number[][] = []
     let terrainCenterE = 0, terrainCenterN = 0
 
     if (state.terrain) {
@@ -297,11 +328,12 @@ export default function BuildingViewer3D() {
       terrainCenterE = centerE
       terrainCenterN = centerN
       const fallbackElev = state.terrain.min_elevation
+      filledElevations = fillNullElevations(state.terrain.elevations, fallbackElev)
 
       const vertAt = (col: number, row: number): [number, number, number] => {
         const E = exp_minE + col * (exp_maxE - exp_minE) / (N - 1)
         const Nv = exp_minN + row * (exp_maxN - exp_minN) / (N - 1)
-        const elev = state.terrain!.elevations[row][col] ?? fallbackElev
+        const elev = filledElevations[row][col]
         return [E - centerE, elev - minZ, -(Nv - centerN)]
       }
 
@@ -400,7 +432,7 @@ export default function BuildingViewer3D() {
 
     // Camera floor constraint — can't go below terrain surface
     const terrainHeightAt = (sceneX: number, sceneZ: number): number => {
-      if (!state.terrain) return 0
+      if (!state.terrain || filledElevations.length === 0) return 0
       const N = state.terrain.grid_size
       const [exp_minE, exp_minN, exp_maxE, exp_maxN] = state.terrain.bbox_lv95
       const centerE = (exp_minE + exp_maxE) / 2
@@ -412,10 +444,9 @@ export default function BuildingViewer3D() {
       const u0 = Math.max(0, Math.min(N - 2, Math.floor(u)))
       const v0 = Math.max(0, Math.min(N - 2, Math.floor(v)))
       const fu = u - u0, fv = v - v0
-      const el = state.terrain.elevations
-      const fb = state.terrain.min_elevation
-      const e00 = el[v0][u0] ?? fb,       e10 = el[v0][u0 + 1] ?? fb
-      const e01 = el[v0 + 1][u0] ?? fb,   e11 = el[v0 + 1][u0 + 1] ?? fb
+      const el = filledElevations  // use null-filled grid — no ?? needed
+      const e00 = el[v0][u0],       e10 = el[v0][u0 + 1]
+      const e01 = el[v0 + 1][u0],   e11 = el[v0 + 1][u0 + 1]
       return (e00 * (1 - fu) * (1 - fv) + e10 * fu * (1 - fv) +
               e01 * (1 - fu) * fv        + e11 * fu * fv) - minZ
     }
@@ -586,7 +617,7 @@ export default function BuildingViewer3D() {
       meshByEgidRef.current.clear()
       clearBuildingMeasurements()
       dirLightRef.current = null
-      setSunSceneCenter(null)
+      rendererRef.current = null
       defaultMatRef.current = null
       highlightMatRef.current = null
       panelSelectMatRef.current = null
@@ -672,7 +703,7 @@ export default function BuildingViewer3D() {
   useEffect(() => {
     const light = dirLightRef.current
     if (!light || state.status !== 'ready') return
-    const center = useMapStore.getState().sunSceneCenter
+    const center = sceneCenterRef.current
     if (!center) return
     const { azimuth, elevation } = computeSunPosition(center.lat, sunDayOfYear, sunHourOfDay)
     if (elevation <= 0) {
@@ -687,6 +718,8 @@ export default function BuildingViewer3D() {
       Math.sin(el) * 1000,
       -Math.cos(az) * Math.cos(el) * 1000,
     )
+    // Trigger one shadow map re-render (autoUpdate is false for performance)
+    if (rendererRef.current) rendererRef.current.shadowMap.needsUpdate = true
   }, [sunDayOfYear, sunHourOfDay, state.status]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Apply panel building highlights whenever selected/hovered egid changes

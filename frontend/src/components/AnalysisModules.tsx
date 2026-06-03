@@ -321,12 +321,23 @@ function SunShadowModule() {
   const {
     sunDayOfYear, setSunDayOfYear,
     sunHourOfDay, setSunHourOfDay,
-    sunSceneCenter,
+    selectedParcel,
   } = useMapStore()
   const [open, setOpen] = useState(false)
 
-  const { elevation } = sunSceneCenter
-    ? computeSunPosition(sunSceneCenter.lat, sunDayOfYear, sunHourOfDay)
+  // Derive lat/lon from parcel centroid — accurate enough for solar calculations
+  const latLon = selectedParcel
+    ? (() => {
+        const coords = (selectedParcel.geometry.coordinates as [number, number][][]).flat()
+        return {
+          lat: coords.reduce((s, c) => s + c[1], 0) / coords.length,
+          lon: coords.reduce((s, c) => s + c[0], 0) / coords.length,
+        }
+      })()
+    : null
+
+  const { elevation } = latLon
+    ? computeSunPosition(latLon.lat, sunDayOfYear, sunHourOfDay)
     : { elevation: 0 }
 
   const isSunUp = elevation > 0
@@ -348,9 +359,9 @@ function SunShadowModule() {
 
       {open && (
         <div className="px-4 pb-4 space-y-4">
-          {!sunSceneCenter && (
+          {!latLon && (
             <p className="text-[11px] text-white/20 italic pt-1">
-              Load a 3D scene to enable shadow simulation.
+              Select a parcel to enable shadow simulation.
             </p>
           )}
 
@@ -395,9 +406,9 @@ function SunShadowModule() {
           </div>
 
           {/* Charts */}
-          {sunSceneCenter && (
+          {latLon && (
             <SunShadowCharts
-              latDeg={sunSceneCenter.lat}
+              latDeg={latLon.lat}
               dayOfYear={sunDayOfYear}
               hourOfDay={sunHourOfDay}
             />
