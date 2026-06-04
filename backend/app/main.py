@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import tiles, buildings, terrain
+from app.routers import tiles, buildings, terrain, portfolio, ingest
 
 app = FastAPI(
     title="Building3D API",
@@ -10,7 +10,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origin_regex=r"http://localhost:\d+",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -20,6 +20,8 @@ app.add_middleware(
 app.include_router(tiles.router)
 app.include_router(buildings.router)
 app.include_router(terrain.router)
+app.include_router(portfolio.router)
+app.include_router(ingest.router)
 
 
 @app.get("/api/health")

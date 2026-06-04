@@ -1,3 +1,4 @@
+import asyncio
 import json
 import shutil
 from datetime import datetime, timezone
@@ -8,6 +9,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/tiles", tags=["tiles"])
+_delete_lock = asyncio.Lock()
 
 DATA_DIR = Path(__file__).parents[2] / "data" / "tiles"
 MANIFEST = DATA_DIR / "manifest.json"
@@ -77,7 +79,8 @@ async def download_tile(tile_id: str, body: DownloadRequest):
 
 @router.delete("/{tile_id}", status_code=204)
 async def delete_tile(tile_id: str):
-    m = _load_manifest()
-    shutil.rmtree(DATA_DIR / tile_id, ignore_errors=True)
-    m.pop(tile_id, None)
-    _save_manifest(m)
+    async with _delete_lock:
+        m = _load_manifest()
+        shutil.rmtree(DATA_DIR / tile_id, ignore_errors=True)
+        m.pop(tile_id, None)
+        _save_manifest(m)

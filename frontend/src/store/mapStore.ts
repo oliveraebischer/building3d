@@ -25,11 +25,11 @@ export type PortfolioEntry = {
 }
 
 const PORTFOLIO_KEY = 'building3d_portfolio'
-function loadPortfolio(): PortfolioEntry[] {
+export function loadPortfolioFromStorage(): PortfolioEntry[] {
   try { return JSON.parse(localStorage.getItem(PORTFOLIO_KEY) ?? '[]') } catch { return [] }
 }
-function savePortfolio(entries: PortfolioEntry[]) {
-  localStorage.setItem(PORTFOLIO_KEY, JSON.stringify(entries))
+export function clearPortfolioStorage() {
+  localStorage.removeItem(PORTFOLIO_KEY)
 }
 
 export type BaseLayer = {
@@ -108,10 +108,15 @@ type MapState = {
   setHighlightedTileId: (id: string | null) => void
   // Portfolio
   portfolio: PortfolioEntry[]
+  setPortfolio: (entries: PortfolioEntry[]) => void
   addToPortfolio: (entry: PortfolioEntry) => void
   removeFromPortfolio: (egrid: string) => void
   updatePortfolioEntry: (egrid: string, patch: Partial<Pick<PortfolioEntry, 'label' | 'status' | 'notes'>>) => void
   savePortfolioSnapshot: (egrid: string, snapshot: PortfolioSnapshot) => void
+  // Ingested data layer
+  ingestedLayer: GeoJSON.FeatureCollection | null
+  ingestedColumns: string[]
+  setIngestedLayer: (fc: GeoJSON.FeatureCollection | null, columns?: string[]) => void
   portfolioHighlightFn: ((geoms: GeoJSON.Polygon[]) => void) | null
   setPortfolioHighlightFn: (fn: (geoms: GeoJSON.Polygon[]) => void) => void
   portfolioSnapshotGeometries: { own: BuildingFeatureCollection; neighbors: BuildingFeatureCollection } | null
@@ -207,27 +212,43 @@ export const useMapStore = create<MapState>((set, get) => ({
   setParcelHighlightFn: (fn) => set({ parcelHighlightFn: fn }),
   highlightedTileId: null,
   setHighlightedTileId: (id) => set({ highlightedTileId: id }),
-  portfolio: loadPortfolio(),
+  portfolio: [],
+  setPortfolio: (entries) => set({ portfolio: entries }),
   addToPortfolio: (entry) => set((s) => {
     const next = [entry, ...s.portfolio.filter(e => e.parcel.egrid !== entry.parcel.egrid)]
-    savePortfolio(next)
+    fetch('/api/portfolio', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(entry),
+    }).catch(() => {})
     return { portfolio: next }
   }),
   removeFromPortfolio: (egrid) => set((s) => {
     const next = s.portfolio.filter(e => e.parcel.egrid !== egrid)
-    savePortfolio(next)
+    fetch(`/api/portfolio/${egrid}`, { method: 'DELETE' }).catch(() => {})
     return { portfolio: next }
   }),
   updatePortfolioEntry: (egrid, patch) => set((s) => {
     const next = s.portfolio.map(e => e.parcel.egrid === egrid ? { ...e, ...patch } : e)
-    savePortfolio(next)
+    fetch(`/api/portfolio/${egrid}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    }).catch(() => {})
     return { portfolio: next }
   }),
   savePortfolioSnapshot: (egrid, snapshot) => set((s) => {
     const next = s.portfolio.map(e => e.parcel.egrid === egrid ? { ...e, snapshot } : e)
-    savePortfolio(next)
+    fetch(`/api/portfolio/${egrid}/snapshot`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(snapshot),
+    }).catch(() => {})
     return { portfolio: next }
   }),
+  ingestedLayer: null,
+  ingestedColumns: [],
+  setIngestedLayer: (fc, columns = []) => set({ ingestedLayer: fc, ingestedColumns: columns }),
   portfolioHighlightFn: null,
   setPortfolioHighlightFn: (fn) => set({ portfolioHighlightFn: fn }),
   portfolioSnapshotGeometries: null,

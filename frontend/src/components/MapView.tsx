@@ -26,6 +26,7 @@ export default function MapView() {
           highlightedTileId } = useMapStore()
   const portfolio = useMapStore(s => s.portfolio)
   const portfolioHoveredBuildingEgid = useMapStore(s => s.portfolioHoveredBuildingEgid)
+  const ingestedLayer = useMapStore(s => s.ingestedLayer)
   const prevHoveredBuildingRef = useRef<string | null>(null)
   const prevHighlightedRef = useRef<string | null>(null)
   const activeLayerRef = useRef<string>('swisstopo-base')
@@ -155,6 +156,45 @@ export default function MapView() {
           ],
         },
       }, 'parcel-highlight-fill')
+
+      // Ingested data layer (hidden until file is uploaded)
+      map.addSource('ingest-data', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      })
+      map.addLayer({
+        id: 'ingest-fill',
+        type: 'fill',
+        source: 'ingest-data',
+        layout: { visibility: 'none' },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        filter: ['in', ['geometry-type'], ['literal', ['Polygon', 'MultiPolygon']]] as any,
+        paint: { 'fill-color': '#FF6B35', 'fill-opacity': 0.25 },
+      })
+      map.addLayer({
+        id: 'ingest-outline',
+        type: 'line',
+        source: 'ingest-data',
+        layout: { visibility: 'none' },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        filter: ['in', ['geometry-type'], ['literal', ['Polygon', 'MultiPolygon', 'LineString', 'MultiLineString']]] as any,
+        paint: { 'line-color': '#FF6B35', 'line-width': 1.5 },
+      })
+      map.addLayer({
+        id: 'ingest-circle',
+        type: 'circle',
+        source: 'ingest-data',
+        layout: { visibility: 'none' },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        filter: ['in', ['geometry-type'], ['literal', ['Point', 'MultiPoint']]] as any,
+        paint: {
+          'circle-radius': 5,
+          'circle-color': '#FF6B35',
+          'circle-opacity': 0.8,
+          'circle-stroke-width': 1,
+          'circle-stroke-color': '#FF4500',
+        },
+      })
 
       // Portfolio pins + parcel fills — always visible, color-coded by status
       // Solid colors for the circle pins; transparent for parcel fills/outlines
@@ -509,6 +549,10 @@ export default function MapView() {
       for (const id of ['portfolio-building-pins', 'portfolio-pins', 'portfolio-parcels']) {
         if (map.getSource(id)) map.removeSource(id)
       }
+      for (const id of ['ingest-fill', 'ingest-outline', 'ingest-circle']) {
+        if (map.getLayer(id)) map.removeLayer(id)
+      }
+      if (map.getSource('ingest-data')) map.removeSource('ingest-data')
       map.remove()
       mapRef.current = null
       mapReadyRef.current = false
@@ -642,6 +686,19 @@ export default function MapView() {
     if (mapReadyRef.current) apply()
     else map?.once('load', apply)
   }, [dataMode])
+
+  // Sync ingested layer to map when it changes
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapReadyRef.current) return
+    const src = map.getSource('ingest-data') as maplibregl.GeoJSONSource | undefined
+    if (!src) return
+    src.setData(ingestedLayer ?? { type: 'FeatureCollection', features: [] })
+    const vis = ingestedLayer ? 'visible' : 'none'
+    ;(['ingest-fill', 'ingest-outline', 'ingest-circle'] as const).forEach((id) => {
+      if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', vis)
+    })
+  }, [ingestedLayer])
 
   // Keep portfolio pins + parcel fills in sync whenever portfolio changes
   useEffect(() => {

@@ -38,3 +38,23 @@ export async function fetchNeighborBuildings(
   if (!res.ok) throw new Error(`${res.status}`)
   return res.json()
 }
+
+export type BuildingMeasurementsResponse = {
+  egid: number
+  footprintM2: number
+  facadeM2: number
+  roofM2: number
+  volumeM3: number
+  circumferenceM: number
+  heightM: number
+  dach_max: number
+}
+
+export async function fetchBuildingMeasurements(
+  egid: number,
+): Promise<BuildingMeasurementsResponse | null> {
+  const res = await fetch(`/api/buildings/${egid}/measurements`)
+  if (res.status === 404) return null
+  if (!res.ok) throw new Error(`${res.status}`)
+  return res.json()
+}

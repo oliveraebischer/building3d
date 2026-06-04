@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useMapStore } from '../store/mapStore'
 import {
   fetchAllTiles, fetchDownloadedTiles, deleteTile,
@@ -63,6 +63,130 @@ function TileRow({
   )
 }
 
+type IngestState =
+  | { status: 'idle' }
+  | { status: 'uploading' }
+  | { status: 'done'; name: string; count: number; columns: string[]; truncated: boolean }
+  | { status: 'error'; message: string }
+
+function IngestPanel() {
+  const { ingestedLayer, ingestedColumns, setIngestedLayer } = useMapStore()
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [state, setState] = useState<IngestState>({ status: 'idle' })
+
+  const handleFile = async (file: File) => {
+    setState({ status: 'uploading' })
+    const form = new FormData()
+    form.append('file', file)
+    try {
+      const res = await fetch('/api/ingest', { method: 'POST', body: form })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Upload failed' }))
+        setState({ status: 'error', message: err.detail ?? 'Upload failed' })
+        return
+      }
+      const data = await res.json()
+      setIngestedLayer(data, data.columns ?? [])
+      setState({
+        status: 'done',
+        name: file.name,
+        count: data.feature_count,
+        columns: data.columns ?? [],
+        truncated: data.truncated,
+      })
+    } catch (e) {
+      setState({ status: 'error', message: String(e) })
+    }
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    const file = e.dataTransfer.files[0]
+    if (file) handleFile(file)
+  }
+
+  const handleClear = () => {
+    setIngestedLayer(null)
+    setState({ status: 'idle' })
+    if (fileRef.current) fileRef.current.value = ''
+  }
+
+  return (
+    <div className="m-3 mt-0 rounded-xl border border-white/[0.08] bg-[#161616] overflow-hidden">
+      <div className="px-4 py-3 border-b border-white/[0.06]">
+        <p className="text-[10px] font-bold tracking-widest uppercase text-white/40">Import Data</p>
+      </div>
+
+      {state.status === 'idle' && !ingestedLayer && (
+        <div
+          className="mx-3 my-3 border border-dashed border-white/[0.12] rounded-lg p-4 text-center cursor-pointer hover:border-white/30 transition-colors"
+          onDrop={handleDrop}
+          onDragOver={(e) => e.preventDefault()}
+          onClick={() => fileRef.current?.click()}
+        >
+          <p className="text-[11px] text-white/40">Drop file or click to browse</p>
+          <p className="text-[10px] text-white/20 mt-1">CSV · XLSX · GeoJSON · SHP · GDB</p>
+          <input
+            ref={fileRef}
+            type="file"
+            className="hidden"
+            accept=".csv,.xlsx,.xls,.geojson,.json,.shp,.zip,.gdb"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f) }}
+          />
+        </div>
+      )}
+
+      {state.status === 'uploading' && (
+        <div className="flex items-center gap-2 px-4 py-4 text-white/40 text-[11px]">
+          <span className="w-3.5 h-3.5 rounded-full border-2 border-white/10 border-t-accent animate-spin shrink-0" />
+          Parsing file…
+        </div>
+      )}
+
+      {state.status === 'error' && (
+        <div className="px-4 py-3 space-y-1.5">
+          <p className="text-[11px] text-red-400/80">{state.message}</p>
+          <button onClick={() => setState({ status: 'idle' })} className="text-[11px] text-white/40 hover:text-white/70 underline">
+            Try again
+          </button>
+        </div>
+      )}
+
+      {(state.status === 'done' || (state.status === 'idle' && ingestedLayer)) && (
+        <div className="px-4 py-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <div>
+              {state.status === 'done' && (
+                <p className="text-[11px] text-white/70 truncate max-w-[160px]">{state.name}</p>
+              )}
+              <p className="text-[10px] text-accent">
+                {state.status === 'done'
+                  ? `${state.count.toLocaleString()} features${state.truncated ? ` (first ${(10000).toLocaleString()} shown)` : ''}`
+                  : 'Layer active'}
+              </p>
+            </div>
+            <button
+              onClick={handleClear}
+              className="text-white/30 hover:text-white/70 transition-colors"
+              aria-label="Clear layer"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" viewBox="0 0 24 24">
+                <path d="M18 6L6 18M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+          {(state.status === 'done' ? state.columns : ingestedColumns).length > 0 && (
+            <p className="text-[10px] text-white/25 leading-relaxed">
+              {(state.status === 'done' ? state.columns : ingestedColumns).slice(0, 8).join(' · ')}
+              {(state.status === 'done' ? state.columns : ingestedColumns).length > 8 && ' …'}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function DataPanel() {
   const {
     dataMode, tileGrid, downloadedTileIds, tileGridLoading,
@@ -112,6 +236,7 @@ export default function DataPanel() {
 
   return (
     <div className="overflow-y-auto max-h-[40vh]">
+      <IngestPanel />
       <div className="m-3 rounded-xl border border-white/[0.08] bg-[#161616] overflow-hidden">
 
         {/* Card header */}
