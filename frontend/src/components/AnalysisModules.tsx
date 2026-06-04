@@ -873,20 +873,30 @@ function GEAKModule() {
     return selectedGWR[0] ?? null
   }, [selectedGWR, analysisSelectedEgid])
 
-  const activeMeasurements: BuildingMeasurements | null = useMemo(() => {
-    if (!buildingMeasurements) return null
-    const egid = activeBldg ? Number(activeBldg.egid) : null
-    return egid != null ? (buildingMeasurements[egid] ?? null) : null
-  }, [buildingMeasurements, activeBldg])
+  // Aggregate 3D measurements across ALL buildings on the parcel
+  const aggregatedMeasurements: BuildingMeasurements | null = useMemo(() => {
+    if (!buildingMeasurements || selectedGWR.length === 0) return null
+    const all = selectedGWR
+      .map(b => buildingMeasurements[Number(b.egid)])
+      .filter((m): m is BuildingMeasurements => m != null)
+    if (all.length === 0) return null
+    return {
+      volumeM3:      all.reduce((s, m) => s + m.volumeM3, 0),
+      facadeM2:      all.reduce((s, m) => s + m.facadeM2, 0),
+      roofM2:        all.reduce((s, m) => s + m.roofM2, 0),
+      circumferenceM: all.reduce((s, m) => s + m.circumferenceM, 0),
+      footprintM2:   all.reduce((s, m) => s + m.footprintM2, 0),
+    }
+  }, [buildingMeasurements, selectedGWR])
 
   const [inputs, setInputs] = useState<GEAKInputs>(() =>
-    getDefaultInputs(activeBldg, activeMeasurements)
+    getDefaultInputs(activeBldg, aggregatedMeasurements, selectedGWR)
   )
 
-  // Re-derive defaults when active building or measurements change
+  // Re-derive defaults when active building, all buildings, or measurements change
   useEffect(() => {
-    setInputs(getDefaultInputs(activeBldg, activeMeasurements))
-  }, [activeBldg, activeMeasurements]) // eslint-disable-line react-hooks/exhaustive-deps
+    setInputs(getDefaultInputs(activeBldg, aggregatedMeasurements, selectedGWR))
+  }, [activeBldg, aggregatedMeasurements, selectedGWR]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const results = useMemo(() => calculateGEAK(inputs), [inputs])
 

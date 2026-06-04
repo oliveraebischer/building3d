@@ -399,18 +399,31 @@ function gwrToUsage(category: string): GEAKUsage {
 export function getDefaultInputs(
   gwr: GwrFeature | null,
   measurements: BuildingMeasurements | null,
+  allGwr: GwrFeature[] = [],
 ): GEAKInputs {
   const year = gwr?.constructionYear ?? null
   const uDef = uDefaultsByYear(year)
   const floors = gwr?.floors ?? 3
-  const footprint = measurements?.footprintM2 ?? gwr?.footprintM2 ?? null
 
   const usage   = gwrToUsage(gwr?.category ?? '')
   const heating = gwrToHeatingSystem(gwr?.energySourceHeating ?? '')
   const isResidential = usage === 'EFH' || usage === 'MFH'
-  const aE = footprint != null
-    ? Math.round(footprint * floors * AE_FACTOR[usage])
-    : 300
+
+  // Aggregate A_E across ALL buildings on the parcel
+  const buildings = allGwr.length > 0 ? allGwr : (gwr ? [gwr] : [])
+  const aEFromGWR = buildings.reduce((sum, b) => {
+    const fp = b.footprintM2
+    const fl = b.floors ?? 3
+    return fp != null ? sum + fp * fl * AE_FACTOR[gwrToUsage(b.category ?? '')] : sum
+  }, 0)
+  // When 3D measurements are available they carry aggregated footprint; pair with avg floors
+  const avgFloors = buildings.length > 0
+    ? buildings.reduce((s, b) => s + (b.floors ?? 3), 0) / buildings.length
+    : floors
+  const aEFrom3D = measurements?.footprintM2 != null
+    ? measurements.footprintM2 * avgFloors * AE_FACTOR[usage]
+    : null
+  const aE = Math.round(aEFrom3D ?? (aEFromGWR > 0 ? aEFromGWR : 300))
 
   return {
     aE,
