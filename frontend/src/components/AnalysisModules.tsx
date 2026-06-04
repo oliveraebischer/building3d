@@ -8,7 +8,7 @@ import {
   calculateGEAK, getDefaultInputs, defaultCOP,
   GEAK_CLASS_COLORS, HEATING_SYSTEMS, USAGES, VENTILATION_TYPES,
 } from '../utils/geakCalculation'
-import type { GEAKInputs, GEAKHeatingSystem, GEAKUsage, GEAKVentilation } from '../utils/geakCalculation'
+import type { GEAKInputs, GEAKResults, GEAKHeatingSystem, GEAKUsage, GEAKVentilation } from '../utils/geakCalculation'
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 
@@ -698,6 +698,169 @@ function SubSection({ title, children }: { title: string; children: React.ReactN
   )
 }
 
+// ─── Berechnungsmodell detail component ──────────────────────────────────────
+
+function CalcRow({ label, formula, value }: { label: string; formula?: string; value: string }) {
+  return (
+    <div className="py-1.5 border-b border-white/[0.03] last:border-0">
+      <div className="flex justify-between items-baseline gap-2">
+        <span className="text-[9px] text-white/35 font-medium shrink-0">{label}</span>
+        <span className="text-[10px] font-mono text-white/60 text-right">{value}</span>
+      </div>
+      {formula && (
+        <p className="text-[9px] font-mono text-white/20 mt-0.5 leading-relaxed">{formula}</p>
+      )}
+    </div>
+  )
+}
+
+function CalcSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="mt-3 first:mt-0">
+      <p className="text-[9px] text-white/20 uppercase tracking-widest mb-1">{title}</p>
+      <div>{children}</div>
+    </div>
+  )
+}
+
+function BerechnungsmodellDetail({ inputs, results }: { inputs: GEAKInputs; results: GEAKResults }) {
+  const c = results.calc
+  const ventLabel = inputs.ventilation === 'Mechanisch'
+    ? `Mechanisch, WRG ${Math.round(inputs.heatRecovery * 100)}%`
+    : inputs.ventilation === 'Kleinanlage'
+    ? `Kleinanlage, WRG ${Math.round(inputs.heatRecovery * 100)}%`
+    : `Infiltration (n₅₀ = ${inputs.n50} h⁻¹)`
+  const fanW = inputs.ventilation === 'Mechanisch' ? 1.0 : inputs.ventilation === 'Kleinanlage' ? 0.5 : 0
+  const isHP = inputs.heatingSystem.startsWith('WP')
+
+  return (
+    <div className="text-[10px]">
+      <CalcSection title="Gebäude">
+        <CalcRow label="A_E — Energiebezugsfläche" value={`${inputs.aE} m²`} />
+        <CalcRow label="Nutzung" value={inputs.usage} />
+        <CalcRow label="Kanton / HDD" value={`${inputs.canton} / ${c.hdd} Kd`} />
+        <CalcRow label="I_solar" value={`${c.iSolar} kWh/(m²·a)`} />
+        <CalcRow label="Fassade / Dach / Boden" value={`${c.facade} / ${c.roof} / ${c.floor} m²`} />
+        <CalcRow label="A_Fenster" formula={`${c.facade} m² × ${Math.round(inputs.windowFraction * 100)}%`} value={`${c.aWindow} m²`} />
+        <CalcRow label="V_Gebäude" value={`${c.vBuilding} m³`} />
+      </CalcSection>
+
+      <CalcSection title="M1 — Gebäudehülle (Wärmeverluste)">
+        <CalcRow
+          label="h_T — Transmission [W/K]"
+          formula={`U_W×(A_F−A_Fe) + U_D×A_D + U_B×A_B + U_Fe×A_Fe + ΔU×A_E`}
+          value={`${c.hT} W/K`}
+        />
+        <CalcRow
+          label="n_eff — Luftwechsel [h⁻¹]"
+          formula={ventLabel}
+          value={`${c.nEff} h⁻¹`}
+        />
+        <CalcRow
+          label="h_V — Lüftung [W/K]"
+          formula={`0.34 × ${c.nEff} × ${c.vBuilding} m³`}
+          value={`${c.hV} W/K`}
+        />
+        <CalcRow
+          label="Q_trans"
+          formula={`${c.hT} W/K × ${c.hdd} Kd × 24h / 1000`}
+          value={`${c.qTrans.toLocaleString()} kWh/a`}
+        />
+        <CalcRow
+          label="Q_Lüft"
+          formula={`${c.hV} W/K × ${c.hdd} Kd × 24h / 1000`}
+          value={`${c.qVent.toLocaleString()} kWh/a`}
+        />
+      </CalcSection>
+
+      <CalcSection title="M1 — Gebäudehülle (Wärmegewinne)">
+        <CalcRow
+          label="Q_I — Interne Gewinne"
+          formula={`Nutzung ${inputs.usage}: Standardwert × A_E`}
+          value={`${c.qI.toLocaleString()} kWh/a`}
+        />
+        <CalcRow
+          label="Q_S — Solare Gewinne"
+          formula={`A_Fe × I_solar × g(${inputs.gValue}) × Fs(${inputs.shadingFs}) × 0.9`}
+          value={`${c.qS.toLocaleString()} kWh/a`}
+        />
+        <CalcRow
+          label="γ — Gewinn-Verlust-Verhältnis"
+          formula={`(Q_I + Q_S) / (Q_trans + Q_Lüft)`}
+          value={String(c.gamma)}
+        />
+        <CalcRow
+          label="η_g — Nutzungsgrad"
+          formula={`SIA 380/1: τ=50h → a=4.33`}
+          value={String(c.etaG)}
+        />
+        <CalcRow
+          label="→ Q_H,eff"
+          formula={`max(0, (Q_trans + Q_Lüft − η_g×(Q_I+Q_S)) / A_E)`}
+          value={`${results.qHEff} kWh/(m²·a)  [${results.classHuelle}]`}
+        />
+      </CalcSection>
+
+      <CalcSection title="M2 — Heizung & Warmwasser">
+        <CalcRow
+          label="E_H — Endenergie Heizung"
+          formula={`Q_H,eff × A_E / ${isHP ? 'COP' : 'η'} (${inputs.cop})`}
+          value={`${results.eH.toLocaleString()} kWh/a`}
+        />
+        <CalcRow
+          label="E_WW — Warmwasser"
+          formula={`25 kWh/(m²·a) × A_E / ${isHP ? 'COP' : '0.85'}`}
+          value={`${results.eWW.toLocaleString()} kWh/a`}
+        />
+      </CalcSection>
+
+      <CalcSection title="M3 — Lüftung">
+        <CalcRow
+          label="E_Lüft — Hilfsenergie"
+          formula={fanW > 0 ? `${fanW} W/m² × A_E × 8760h / 1000` : 'Keine mech. Lüftung'}
+          value={`${results.eLueft.toLocaleString()} kWh/a`}
+        />
+      </CalcSection>
+
+      {inputs.pvKwp > 0 && (
+        <CalcSection title="M4 — Photovoltaik">
+          <CalcRow
+            label="E_PV — Produktion"
+            formula={`${inputs.pvKwp} kWp × 900 kWh/(kWp·a)`}
+            value={`${results.ePV.toLocaleString()} kWh/a`}
+          />
+        </CalcSection>
+      )}
+
+      <CalcSection title="M5 — Strom">
+        <CalcRow
+          label="E_El — Haushalt/Betrieb"
+          formula={`Nutzung ${inputs.usage}: Standardwert × A_E`}
+          value={`${results.eEl.toLocaleString()} kWh/a`}
+        />
+      </CalcSection>
+
+      <CalcSection title="M6 — Gesamtenergie & CO₂">
+        <CalcRow
+          label={`Gewichtungsfaktor F_${inputs.heatingSystem}`}
+          value={String(c.fCarrier)}
+        />
+        <CalcRow
+          label="E_gew — Gewichtete Energie"
+          formula={`(E_H+E_WW)×${c.fCarrier} + E_Lüft×2 + E_El×2 − E_PV×2`}
+          value={`${results.eGew} kWh/(m²·a)  [${results.classGesamt}]`}
+        />
+        <CalcRow label="Referenzwert E_gew,Ref" value={`${results.eGewRef} kWh/(m²·a)`} />
+        <CalcRow
+          label="CO₂ direkt"
+          formula={isHP ? `Wärmepumpe → kein direktes CO₂` : `(E_H+E_WW) × EF / A_E`}
+          value={`${results.co2Direkt} kg/(m²·a)  [${results.classCO2}]`}
+        />
+      </CalcSection>
+    </div>
+  )
+}
+
 function GEAKModule() {
   const { selectedGWR, buildingMeasurements, analysisSelectedEgid } = useMapStore()
   const [open, setOpen] = useState(false)
@@ -905,6 +1068,11 @@ function GEAKModule() {
                 {results.ePV > 0    && <Attr label="PV-Produktion"        value={`−${results.ePV.toLocaleString()} kWh/a`} />}
                 <Attr label="Gewichtete Energie E_gew" value={`${results.eGew} kWh/(m²·a)`} />
               </div>
+
+              {/* Berechnungsmodell */}
+              <SubSection title="Berechnungsmodell (SIA 380/1)">
+                <BerechnungsmodellDetail inputs={inputs} results={results} />
+              </SubSection>
             </>
           )}
         </div>

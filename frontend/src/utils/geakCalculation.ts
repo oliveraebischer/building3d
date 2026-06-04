@@ -16,10 +16,11 @@ export interface GEAKInputs {
   canton: string
   floors: number
   floorHeight: number     // [m]
-  // Gebäudehülle — override if no 3D measurements
+  // Gebäudehülle — from 3D model when available
   facadeM2: number | null
   roofM2: number | null
   footprintM2: number | null
+  volumeM3: number | null // 3D model volume above terrain
   // U-values [W/(m²·K)]
   uWall: number
   uRoof: number
@@ -59,6 +60,26 @@ export interface GEAKResults {
   classGesamt: string     // A–G
   co2Direkt: number       // [kg CO₂/(m²·a)]
   classCO2: string        // A–G
+  // Intermediate values exposed for Berechnungsmodell display
+  calc: {
+    hdd: number
+    iSolar: number
+    facade: number
+    roof: number
+    floor: number
+    aWindow: number
+    vBuilding: number
+    hT: number
+    nEff: number
+    hV: number
+    qTrans: number
+    qVent: number
+    qI: number
+    qS: number
+    gamma: number
+    etaG: number
+    fCarrier: number
+  }
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -133,6 +154,15 @@ const E_EL_SPECIFIC: Record<GEAKUsage, number> = {
   Verkauf: 60,
 }
 
+// A_E / gross-floor-area benchmark factors by usage (SIA 380/1 practice)
+const AE_FACTOR: Record<GEAKUsage, number> = {
+  EFH:     0.80,
+  MFH:     0.76,
+  Büro:    0.72,
+  Schule:  0.68,
+  Verkauf: 0.65,
+}
+
 // Standard internal heat gains q_I [W/m²] by usage
 const Q_INTERNAL: Record<GEAKUsage, number> = {
   EFH:    3.0,
@@ -183,7 +213,7 @@ export function calculateGEAK(inp: GEAKInputs): GEAKResults {
   const facade    = inp.facadeM2   ?? (Math.sqrt(footprint) * 4 * inp.floors * inp.floorHeight)
   const roof      = inp.roofM2     ?? footprint * 1.1
   const aWindow   = facade * inp.windowFraction
-  const vBuilding = inp.aE * inp.floorHeight  // simplified: A_E ≈ A per floor × floors
+  const vBuilding = inp.volumeM3 ?? (footprint * inp.floors * inp.floorHeight)
 
   // Module 1 — Heizwärmebedarf (SIA 380/1 simplified)
   const hT =
@@ -195,7 +225,9 @@ export function calculateGEAK(inp: GEAKInputs): GEAKResults {
 
   // Ventilation: effective air change considering heat recovery
   const nEff = inp.ventilation === 'Mechanisch'
-    ? 0.5 * (1 - inp.heatRecovery) + 0.1  // mechanical with WRG + infiltration
+    ? 0.5  * (1 - inp.heatRecovery) + 0.1  // full mechanical with WRG + infiltration
+    : inp.ventilation === 'Kleinanlage'
+    ? 0.35 * (1 - inp.heatRecovery) + 0.1  // single-room units, lower ACH, partial WRG
     : inp.n50 * 0.07                        // natural: n50 × e (SIA 380/1 standard factor)
 
   const hV = 0.34 * nEff * vBuilding  // [W/K]
@@ -273,6 +305,25 @@ export function calculateGEAK(inp: GEAKInputs): GEAKResults {
     classGesamt: classFromKW(kwGesamt),
     co2Direkt: Math.round(co2Direkt * 10) / 10,
     classCO2: classFromCO2(co2Direkt),
+    calc: {
+      hdd,
+      iSolar,
+      facade: Math.round(facade * 10) / 10,
+      roof:   Math.round(roof   * 10) / 10,
+      floor:  Math.round(footprint * 10) / 10,
+      aWindow: Math.round(aWindow * 10) / 10,
+      vBuilding: Math.round(vBuilding),
+      hT:      Math.round(hT * 10) / 10,
+      nEff:    Math.round(nEff * 1000) / 1000,
+      hV:      Math.round(hV * 10) / 10,
+      qTrans:  Math.round(qTrans),
+      qVent:   Math.round(qVent),
+      qI:      Math.round(qI),
+      qS:      Math.round(qS),
+      gamma:   Math.round(gamma * 1000) / 1000,
+      etaG:    Math.round(etaG * 1000) / 1000,
+      fCarrier,
+    },
   }
 }
 
@@ -353,11 +404,13 @@ export function getDefaultInputs(
   const uDef = uDefaultsByYear(year)
   const floors = gwr?.floors ?? 3
   const footprint = measurements?.footprintM2 ?? gwr?.footprintM2 ?? null
-  const aE = footprint != null ? Math.round(footprint * floors * 0.85) : 300
 
   const usage   = gwrToUsage(gwr?.category ?? '')
   const heating = gwrToHeatingSystem(gwr?.energySourceHeating ?? '')
   const isResidential = usage === 'EFH' || usage === 'MFH'
+  const aE = footprint != null
+    ? Math.round(footprint * floors * AE_FACTOR[usage])
+    : 300
 
   return {
     aE,
@@ -365,9 +418,10 @@ export function getDefaultInputs(
     canton: gwr?.canton ?? 'ZH',
     floors,
     floorHeight: 2.8,
-    facadeM2:   measurements?.facadeM2 ?? null,
-    roofM2:     measurements?.roofM2 ?? null,
+    facadeM2:    measurements?.facadeM2    ?? null,
+    roofM2:      measurements?.roofM2      ?? null,
     footprintM2: measurements?.footprintM2 ?? gwr?.footprintM2 ?? null,
+    volumeM3:    measurements?.volumeM3    ?? null,
     uWall:   uDef.uWall,
     uRoof:   uDef.uRoof,
     uFloor:  uDef.uFloor,

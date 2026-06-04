@@ -43,6 +43,16 @@ function look<T extends number>(table: Record<T, string>, code: T | null | undef
   return table[code] ?? `Code ${code}`
 }
 
+// Maps GBAUP period code to approximate midpoint year for U-value defaults
+function gbaupToYear(code: number | null | undefined): number | null {
+  const map: Record<number, number> = {
+    8011: 1910, 8012: 1935, 8013: 1955, 8014: 1966, 8015: 1976,
+    8016: 1983, 8017: 1988, 8018: 1993, 8019: 1998, 8020: 2003,
+    8021: 2008, 8022: 2013, 8023: 2020,
+  }
+  return code != null ? (map[code] ?? null) : null
+}
+
 // ─── Types ─────────────────────────────────────────────────────────────────
 
 export type ParcelFeature = {
@@ -89,7 +99,7 @@ function attributesToGwrFeature(r: Record<string, any>): GwrFeature {
     canton: a.gdekt ?? '—',
     status: look(GSTAT, a.gstat),
     category: look(GKAT, a.gkat),
-    constructionYear: a.gbauj ?? null,
+    constructionYear: a.gbauj ?? gbaupToYear(a.gbaup),
     constructionPeriod: look(GBAUP, a.gbaup),
     floors: a.gastw ?? null,
     apartments: a.ganzwhg ?? null,
