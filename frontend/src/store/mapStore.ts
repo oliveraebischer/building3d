@@ -5,6 +5,7 @@ import { downloadTile as apiDownloadTile } from '../api/tiles'
 import type { TileGridFeature } from '../api/tiles'
 import type { BuildingMeasurements } from '../utils/buildingMeasurements'
 import type { BuildingFeatureCollection } from '../api/buildings'
+import type { TerrainGrid } from '../api/terrain'
 
 export type PortfolioStatus = 'watch' | 'due-diligence' | 'active' | 'on-hold' | 'divested'
 
@@ -141,6 +142,9 @@ type MapState = {
   setSunDayOfYear: (d: number) => void
   sunHourOfDay: number
   setSunHourOfDay: (h: number) => void
+  // Eagerly prefetched 3D geometry (loaded as soon as tile is ready, before Analyse is clicked)
+  prefetchedGeometry: { egrid: string; data: BuildingFeatureCollection; terrain: TerrainGrid | null } | null
+  setPrefetchedGeometry: (g: { egrid: string; data: BuildingFeatureCollection; terrain: TerrainGrid | null } | null) => void
 }
 
 export const useMapStore = create<MapState>((set, get) => ({
@@ -270,4 +274,6 @@ export const useMapStore = create<MapState>((set, get) => ({
   setSunDayOfYear: (d) => set({ sunDayOfYear: d }),
   sunHourOfDay: 12.0,
   setSunHourOfDay: (h) => set({ sunHourOfDay: h }),
+  prefetchedGeometry: null,
+  setPrefetchedGeometry: (g) => set({ prefetchedGeometry: g }),
 }))

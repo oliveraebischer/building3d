@@ -3,8 +3,9 @@ import { useMapStore } from '../store/mapStore'
 import { COLLAPSED_W, SEPARATOR_W } from '../constants'
 import BuildingViewer3D from './BuildingViewer3D'
 import AnalysisModules from './AnalysisModules'
+import type { AutoTileStatus } from '../hooks/useAutoTileDownload'
 
-export default function AnalysisPanel() {
+export default function AnalysisPanel({ autoTileStatus }: { autoTileStatus: AutoTileStatus }) {
   const { sidebarCollapsed, sidebarWidth, sidebarResizing,
           setAnalysisMode } = useMapStore()
 
@@ -83,7 +84,7 @@ export default function AnalysisPanel() {
           </button>
         </div>
         <div className="flex-1 overflow-hidden">
-          <BuildingViewer3D />
+          <BuildingViewer3D autoTileStatus={autoTileStatus} />
         </div>
       </div>
     </div>

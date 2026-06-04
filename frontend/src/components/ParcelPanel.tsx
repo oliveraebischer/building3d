@@ -4,6 +4,7 @@ import type { PortfolioEntry, PortfolioStatus } from '../store/mapStore'
 import type { GwrFeature } from '../api/geoAdmin'
 import { fetchBuildings, fetchNeighborBuildings } from '../api/buildings'
 import type { BuildingFeatureCollection } from '../api/buildings'
+import type { AutoTileStatus } from '../hooks/useAutoTileDownload'
 
 function Row({ label, value }: { label: string; value: string | number | null | undefined }) {
   if (value == null || value === '—' || value === '') return null
@@ -47,11 +48,11 @@ function ChevronIcon({ open }: { open: boolean }) {
   )
 }
 
-export default function ParcelPanel() {
+export default function ParcelPanel({ autoTileStatus }: { autoTileStatus?: AutoTileStatus }) {
   const { parcelLoading, selectedParcel, selectedGWR, parcelError,
           clearParcel, clearHighlight, setHighlightBuilding, mapInstance,
           portfolio, addToPortfolio, removeFromPortfolio, savePortfolioSnapshot,
-          setAnalysisMode } = useMapStore()
+          setAnalysisMode, prefetchedGeometry } = useMapStore()
   const [expandedEgids, setExpandedEgids] = useState<Set<string>>(new Set())
 
   // Portfolio add state: 'idle' | 'selecting' | 'labeling' | 'done'
@@ -394,13 +395,27 @@ export default function ParcelPanel() {
 
           {/* Analysis entry */}
           <div className="px-4 py-3 border-b border-white/[0.06]">
-            <button
-              onClick={() => setAnalysisMode(true)}
-              className="w-full py-2 rounded-lg bg-accent text-[#0d0d0d] text-[12px] font-bold
-                         tracking-wide hover:bg-accent/90 active:scale-[0.98] transition-all"
-            >
-              Analyse
-            </button>
+            {(() => {
+              const isLoading = autoTileStatus === 'fetching-index' || autoTileStatus === 'downloading'
+                || (autoTileStatus === 'ready' && prefetchedGeometry?.egrid !== selectedParcel?.egrid)
+              const label = autoTileStatus === 'fetching-index' ? 'Finding tile…'
+                : autoTileStatus === 'downloading' ? 'Downloading…'
+                : isLoading ? 'Loading 3D…'
+                : 'Analyse'
+              return (
+                <button
+                  onClick={() => setAnalysisMode(true)}
+                  className="w-full py-2 rounded-lg bg-accent text-[#0d0d0d] text-[12px] font-bold
+                             tracking-wide hover:bg-accent/90 active:scale-[0.98] transition-all
+                             flex items-center justify-center gap-2"
+                >
+                  {isLoading && (
+                    <span className="w-3 h-3 rounded-full border-2 border-[#0d0d0d]/30 border-t-[#0d0d0d] animate-spin shrink-0" />
+                  )}
+                  {label}
+                </button>
+              )
+            })()}
           </div>
 
           {/* Buildings section */}

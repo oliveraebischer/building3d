@@ -63,6 +63,25 @@ export async function fetchAllTiles(): Promise<TileGridFeature[]> {
   return features
 }
 
+export async function fetchTilesForBbox(
+  bbox: [number, number, number, number],
+): Promise<TileGridFeature[]> {
+  const [minLng, minLat, maxLng, maxLat] = bbox
+  const url = `${STAC_BASE}/collections/${COLLECTION}/items?limit=10&bbox=${minLng},${minLat},${maxLng},${maxLat}`
+  const res = await fetch(url, { signal: AbortSignal.timeout(15_000) })
+  if (!res.ok) return []
+  const data = await res.json()
+  const features: TileGridFeature[] = []
+  for (const item of (data.features ?? []) as StacItem[]) {
+    const gdbEntry = Object.entries(item.assets ?? {}).find(([k]) => k.endsWith('.gdb.zip'))
+    const gdbHref = gdbEntry?.[1]?.href
+    if (gdbHref && /_\d+-\d+$/.test(item.id)) {
+      features.push({ id: item.id, geometry: item.geometry, gdbHref })
+    }
+  }
+  return features
+}
+
 export async function fetchDownloadedTiles(): Promise<DownloadedTile[]> {
   try {
     const res = await fetch('/api/tiles')

@@ -7,26 +7,27 @@ import { fetchTerrain, type TerrainGrid } from '../api/terrain'
 import { findBuildingByEGID } from '../api/geoAdmin'
 import { computeMeasurements } from '../utils/buildingMeasurements'
 import { computeSunPosition } from '../utils/solarPosition'
+import { loadImage, computeMapUrls, getPreloadedMapImages } from '../utils/mapTexture'
+import { pointInRing } from '../utils/tileUtils'
+import type { AutoTileStatus } from '../hooks/useAutoTileDownload'
+
+function filterNullEgidByParcel(
+  data: BuildingFeatureCollection,
+  parcelRing: [number, number][],
+): BuildingFeatureCollection {
+  const features = data.features.filter(feat => {
+    if (feat.properties.egid != null) return true
+    const all = feat.geometry.coordinates.flat(2) as [number, number, number][]
+    if (!all.length) return false
+    const lng = all.reduce((s, c) => s + c[0], 0) / all.length
+    const lat = all.reduce((s, c) => s + c[1], 0) / all.length
+    return pointInRing(lng, lat, parcelRing)
+  })
+  return { ...data, features }
+}
 
 const fmtLV95 = (n: number) =>
   n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '\u2019') // Swiss apostrophe: 2'660'123
-
-function loadImage(url: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image()
-    img.crossOrigin = 'anonymous'
-    img.onload = () => resolve(img)
-    img.onerror = reject
-    img.src = url
-  })
-}
-
-function wgs84ToMercator(lon: number, lat: number): [number, number] {
-  return [
-    lon * 20037508.34 / 180,
-    Math.log(Math.tan((90 + lat) * Math.PI / 360)) / (Math.PI / 180) * 20037508.34 / 180,
-  ]
-}
 
 // swisstopo approximation formulas — accuracy < 1 m across Switzerland
 function lv95ToWgs84(E: number, N: number): [number, number] {
@@ -40,18 +41,21 @@ function lv95ToWgs84(E: number, N: number): [number, number] {
 type ViewerState =
   | { status: 'idle' }
   | { status: 'no-tile' }
+  | { status: 'fetching-tile-index' }
+  | { status: 'downloading-tile' }
   | { status: 'loading' }
   | { status: 'empty' }
   | { status: 'error' }
   | { status: 'ready'; data: BuildingFeatureCollection; terrain: TerrainGrid | null }
 
-export default function BuildingViewer3D() {
+export default function BuildingViewer3D({ autoTileStatus }: { autoTileStatus: AutoTileStatus }) {
   const {
-    selectedParcel, selectedGWR, downloadedTileIds,
+    selectedParcel, selectedGWR,
     analysisSelectedEgid, analysisHoveredEgid,
     setBuildingMeasurements, clearBuildingMeasurements,
     sunDayOfYear, sunHourOfDay,
     portfolioSnapshotGeometries, setPortfolioSnapshotGeometries,
+    prefetchedGeometry,
   } = useMapStore()
   const [state, setState] = useState<ViewerState>({ status: 'idle' })
   const canvasRef = useRef<HTMLDivElement>(null)
@@ -113,7 +117,22 @@ export default function BuildingViewer3D() {
       return
     }
 
-    if (downloadedTileIds.size === 0) { setState({ status: 'no-tile' }); return }
+    if (autoTileStatus === 'fetching-index') { setState({ status: 'fetching-tile-index' }); return }
+    if (autoTileStatus === 'downloading')    { setState({ status: 'downloading-tile' }); return }
+    if (autoTileStatus === 'tile-not-found') { setState({ status: 'no-tile' }); return }
+    if (autoTileStatus !== 'ready') { setState({ status: 'idle' }); return }
+
+    const parcelRing = (selectedParcel.geometry.coordinates as [number, number][][])[0]
+
+    // Use prefetched geometry if already loaded in the background
+    const prefetched = prefetchedGeometry
+    if (prefetched?.egrid === selectedParcel.egrid) {
+      const filtered = filterNullEgidByParcel(prefetched.data, parcelRing)
+      setState(filtered.features.length > 0
+        ? { status: 'ready', data: filtered, terrain: prefetched.terrain }
+        : { status: 'empty' })
+      return
+    }
 
     const egids = selectedGWRRef.current.map(b => b.egid).filter(e => e !== '—')
     if (egids.length === 0) { setState({ status: 'empty' }); return }
@@ -142,8 +161,9 @@ export default function BuildingViewer3D() {
       fetchTerrain(terrainBbox, 32).catch(() => null),
     ]).then(([data, terrain]) => {
       if (cancelled) return
-      setState(data.features.length > 0
-        ? { status: 'ready', data, terrain }
+      const filtered = filterNullEgidByParcel(data, parcelRing)
+      setState(filtered.features.length > 0
+        ? { status: 'ready', data: filtered, terrain }
         : { status: 'empty' })
     }).catch(() => { if (!cancelled) setState({ status: 'error' }) })
 
@@ -152,7 +172,7 @@ export default function BuildingViewer3D() {
       neighborCacheRef.current.clear()
       fetchingRef.current.clear()
     }
-  }, [selectedParcel?.egrid, downloadedTileIds.size]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedParcel?.egrid, autoTileStatus]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fill null terrain elevation values with neighbor interpolation before mesh construction.
   // Null cells from geo.admin.ch fall back to min_elevation, creating deep spikes in the mesh.
@@ -280,7 +300,7 @@ export default function BuildingViewer3D() {
       mesh.castShadow = true
       mesh.receiveShadow = true
       mesh.userData = { egid: feat.properties.egid, isNeighbor: false }
-      meshByEgidRef.current.set(feat.properties.egid, mesh)
+      if (feat.properties.egid != null) meshByEgidRef.current.set(feat.properties.egid, mesh)
       group.add(mesh)
     }
     scene.add(group)
@@ -324,13 +344,16 @@ export default function BuildingViewer3D() {
     })
     panelSelectMatRef.current = panelSelectMat
 
-    // Terrain mesh
+    // Ground surface — elevation mesh when available, flat plane otherwise
     // LV95 is metric: E-centerE→X, elev-minZ→Y, -(N-centerN)→Z
     let terrainMesh: THREE.Mesh | null = null
     let terrainMat: THREE.MeshLambertMaterial | null = null
     // Null-filled elevation grid — hoisted so terrainHeightAt can reference it
     let filledElevations: number[][] = []
     let terrainCenterE = 0, terrainCenterN = 0
+
+    terrainMat = new THREE.MeshLambertMaterial({ color: 0x2a2a2a, side: THREE.FrontSide })
+    terrainMatRef.current = terrainMat
 
     if (state.terrain) {
       const N = state.terrain.grid_size
@@ -368,64 +391,70 @@ export default function BuildingViewer3D() {
       terrainGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(tPositions), 3))
       terrainGeo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(tUVs), 2))
       terrainGeo.computeVertexNormals()
-      terrainMat = new THREE.MeshLambertMaterial({ color: 0x2a2a2a, side: THREE.FrontSide })
       terrainMesh = new THREE.Mesh(terrainGeo, terrainMat)
       terrainMesh.receiveShadow = true
       scene.add(terrainMesh)
-
-      terrainMatRef.current = terrainMat
-      let loadCancelled = false
-
-      const loadMapTexture = async () => {
-        try {
-          const parcelCoords = (selectedParcel!.geometry.coordinates as [number, number][][]).flat()
-          const plngs = parcelCoords.map(c => c[0]), plats = parcelCoords.map(c => c[1])
-          const [pMinLng, pMaxLng] = [Math.min(...plngs), Math.max(...plngs)]
-          const [pMinLat, pMaxLat] = [Math.min(...plats), Math.max(...plats)]
-          const tpad = 1.5
-          const minLng = pMinLng - (pMaxLng - pMinLng) * tpad
-          const maxLng = pMaxLng + (pMaxLng - pMinLng) * tpad
-          const minLat = pMinLat - (pMaxLat - pMinLat) * tpad
-          const maxLat = pMaxLat + (pMaxLat - pMinLat) * tpad
-
-          const [minX, minY] = wgs84ToMercator(minLng, minLat)
-          const [maxX, maxY] = wgs84ToMercator(maxLng, maxLat)
-          const bbox = `${minX},${minY},${maxX},${maxY}`
-          const imgH = 2048
-          const imgW = Math.round(imgH * (maxX - minX) / (maxY - minY))
-
-          const wmsBase = 'https://wms.geo.admin.ch/?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap'
-          const common  = `&CRS=EPSG:3857&WIDTH=${imgW}&HEIGHT=${imgH}&BBOX=${bbox}&STYLES=`
-          const swissUrl = `${wmsBase}&LAYERS=ch.swisstopo.swissimage-product&FORMAT=image/jpeg&TRANSPARENT=false${common}`
-          const cadUrl   = `${wmsBase}&LAYERS=ch.kantone.cadastralwebmap-farbe&FORMAT=image/png&TRANSPARENT=true${common}`
-
-          const [swissImg, cadImg] = await Promise.all([loadImage(swissUrl), loadImage(cadUrl)])
-          if (loadCancelled) return
-
-          const canvas = document.createElement('canvas')
-          canvas.width = imgW; canvas.height = imgH
-          const ctx = canvas.getContext('2d')!
-          ctx.drawImage(swissImg, 0, 0)
-          ctx.globalAlpha = 0.5
-          ctx.drawImage(cadImg, 0, 0)
-
-          if (loadCancelled) return
-          const tex = new THREE.CanvasTexture(canvas)
-          compositeTexRef.current = tex
-          const mat = terrainMatRef.current
-          if (mat && showMapLayerRef.current) {
-            mat.map = tex
-            mat.color.set(0xffffff)
-            mat.needsUpdate = true
-          }
-        } catch { /* keep gray on error */ }
-      }
-      loadMapTexture()
-
-      // Captured for cleanup
-      ;(terrainMesh as THREE.Mesh & { _cancelLoad?: () => void })._cancelLoad =
-        () => { loadCancelled = true }
+    } else {
+      // Flat plane at building floor level with UV mapping matching the terrain bbox
+      const parcelCoords = (selectedParcel!.geometry.coordinates as [number, number][][]).flat()
+      const plngs = parcelCoords.map(c => c[0]), plats = parcelCoords.map(c => c[1])
+      const pMinLng = Math.min(...plngs), pMaxLng = Math.max(...plngs)
+      const pMinLat = Math.min(...plats), pMaxLat = Math.max(...plats)
+      const tpad = 1.5
+      const tMinLng = pMinLng - (pMaxLng - pMinLng) * tpad
+      const tMaxLng = pMaxLng + (pMaxLng - pMinLng) * tpad
+      const tMinLat = pMinLat - (pMaxLat - pMinLat) * tpad
+      const tMaxLat = pMaxLat + (pMaxLat - pMinLat) * tpad
+      // Scene coords: x=east, z=south (large z = south, small z = north)
+      const fx0 = (tMinLng - originLon) * cosLat * 111320  // west edge
+      const fx1 = (tMaxLng - originLon) * cosLat * 111320  // east edge
+      const fz0 = -(tMinLat - originLat) * 111320          // south edge (large z)
+      const fz1 = -(tMaxLat - originLat) * 111320          // north edge (small z)
+      const flatGeo = new THREE.BufferGeometry()
+      // SW=(u0,v0), SE=(u1,v0), NW=(u0,v1), NE=(u1,v1)
+      flatGeo.setAttribute('position', new THREE.BufferAttribute(
+        new Float32Array([fx0,0,fz0,  fx1,0,fz0,  fx0,0,fz1,  fx1,0,fz1]), 3))
+      flatGeo.setAttribute('uv', new THREE.BufferAttribute(
+        new Float32Array([0,0,  1,0,  0,1,  1,1]), 2))
+      flatGeo.setIndex([0,1,2,  1,3,2])
+      flatGeo.computeVertexNormals()
+      terrainMesh = new THREE.Mesh(flatGeo, terrainMat)
+      terrainMesh.receiveShadow = true
+      scene.add(terrainMesh)
     }
+
+    // Always load aerial + cadastral texture onto whichever ground surface we have
+    let loadCancelled = false
+    const loadMapTexture = async () => {
+      try {
+        const { swissUrl, cadUrl, imgW, imgH } = computeMapUrls(selectedParcel!)
+        const cached = getPreloadedMapImages(selectedParcel!.egrid)
+        const [swissImg, cadImg] = cached
+          ? [cached.swissImg, cached.cadImg]
+          : await Promise.all([loadImage(swissUrl), loadImage(cadUrl)])
+        if (loadCancelled) return
+
+        const canvas = document.createElement('canvas')
+        canvas.width = imgW; canvas.height = imgH
+        const ctx = canvas.getContext('2d')!
+        ctx.drawImage(swissImg, 0, 0)
+        ctx.globalAlpha = 0.5
+        ctx.drawImage(cadImg, 0, 0)
+
+        if (loadCancelled) return
+        const tex = new THREE.CanvasTexture(canvas)
+        compositeTexRef.current = tex
+        const mat = terrainMatRef.current
+        if (mat && showMapLayerRef.current) {
+          mat.map = tex
+          mat.color.set(0xffffff)
+          mat.needsUpdate = true
+        }
+      } catch { /* keep gray on error */ }
+    }
+    loadMapTexture()
+    ;(terrainMesh as THREE.Mesh & { _cancelLoad?: () => void })._cancelLoad =
+      () => { loadCancelled = true }
 
     // Camera framing — center on buildings; maxDim from full scene (includes terrain)
     const groupBox = new THREE.Box3().setFromObject(group)
@@ -470,6 +499,7 @@ export default function BuildingViewer3D() {
     // Compute measurements for each parcel building using 3D mesh + terrain
     const measurements: Record<number, ReturnType<typeof computeMeasurements>> = {}
     for (const feat of state.data.features) {
+      if (feat.properties.egid == null) continue
       const mesh = meshByEgidRef.current.get(feat.properties.egid)
       if (mesh) {
         measurements[feat.properties.egid] = computeMeasurements(mesh, feat, terrainHeightAt, toLocal)
@@ -682,8 +712,15 @@ export default function BuildingViewer3D() {
     ]
 
     const selectedEgids = new Set(selectedGWR.map(b => b.egid))
+    const parcelRing = (selectedParcel!.geometry.coordinates as [number, number][][])[0]
     for (const feat of neighborData.features) {
       if (selectedEgids.has(String(feat.properties.egid))) continue
+      if (feat.properties.egid == null) {
+        const all = feat.geometry.coordinates.flat(2) as [number, number, number][]
+        const lng = all.reduce((s, c) => s + c[0], 0) / all.length
+        const lat = all.reduce((s, c) => s + c[1], 0) / all.length
+        if (pointInRing(lng, lat, parcelRing)) continue
+      }
       const positions: number[] = []
       for (const poly of feat.geometry.coordinates) {
         const ring = poly[0]
@@ -756,17 +793,18 @@ export default function BuildingViewer3D() {
     })
   }, [analysisSelectedEgid, analysisHoveredEgid, state.status]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Lazy-fetch neighbours on first toggle-ON per parcel (bbox expanded 100% in each direction)
+  // Preload neighbours as soon as the scene is ready — before the toggle is clicked
   useEffect(() => {
-    if (!showNeighbors || neighborData !== null || !selectedParcel) return
+    if (state.status !== 'ready' || neighborData !== null || !selectedParcel) return
     const coords = (selectedParcel.geometry.coordinates as [number, number][][]).flat()
     const lngs = coords.map(c => c[0]), lats = coords.map(c => c[1])
-    const [minLng, maxLng] = [Math.min(...lngs), Math.max(...lngs)]
-    const [minLat, maxLat] = [Math.min(...lats), Math.max(...lats)]
-    const pad = 1.0
+    const cx = (Math.min(...lngs) + Math.max(...lngs)) / 2
+    const cy = (Math.min(...lats) + Math.max(...lats)) / 2
+    // Fixed 200 m radius — consistent regardless of parcel size
+    const rLat = 200 / 111320
+    const rLon = 200 / (111320 * Math.cos(cy * Math.PI / 180))
     const neighborBbox: [number, number, number, number] = [
-      minLng - (maxLng - minLng) * pad, minLat - (maxLat - minLat) * pad,
-      maxLng + (maxLng - minLng) * pad, maxLat + (maxLat - minLat) * pad,
+      cx - rLon, cy - rLat, cx + rLon, cy + rLat,
     ]
     let cancelled = false
     setNeighborLoading(true)
@@ -775,7 +813,7 @@ export default function BuildingViewer3D() {
       .catch(() => { if (!cancelled) setNeighborData({ type: 'FeatureCollection', features: [] }) })
       .finally(() => { if (!cancelled) setNeighborLoading(false) })
     return () => { cancelled = true }
-  }, [showNeighbors, selectedParcel?.egrid]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [state.status, selectedParcel?.egrid]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="w-full h-full relative bg-[#080808]">
@@ -790,12 +828,27 @@ export default function BuildingViewer3D() {
         </div>
       )}
 
+      {state.status === 'fetching-tile-index' && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <div className="flex items-center gap-2.5 text-white/30 text-[12px]">
+            <span className="w-3.5 h-3.5 rounded-full border-2 border-white/10 border-t-accent animate-spin" />
+            Finding 3D tile…
+          </div>
+        </div>
+      )}
+
+      {state.status === 'downloading-tile' && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <div className="flex items-center gap-2.5 text-white/30 text-[12px]">
+            <span className="w-3.5 h-3.5 rounded-full border-2 border-white/10 border-t-accent animate-spin" />
+            Downloading 3D data…
+          </div>
+        </div>
+      )}
+
       {state.status === 'no-tile' && (
         <div className="absolute inset-0 flex items-center justify-center px-8 pointer-events-none">
-          <div className="text-center space-y-1">
-            <p className="text-[12px] text-white/30">No tile downloaded for this area.</p>
-            <p className="text-[11px] text-white/20">Open Data mode to download the tile first.</p>
-          </div>
+          <p className="text-[12px] text-white/30 text-center">No 3D tile coverage for this location.</p>
         </div>
       )}
 

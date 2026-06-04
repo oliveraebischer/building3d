@@ -25,8 +25,19 @@ def _sync_fetch_buildings(egid_set: Optional[frozenset], lv95_bbox: tuple) -> li
                 with fiona.open(vsipath, layer="Building_solid") as src:
                     for f in src.filter(bbox=lv95_bbox):
                         egid = f["properties"].get("EGID")
-                        if egid_set is not None and egid not in egid_set:
+                        if egid_set is not None and egid is not None and egid not in egid_set:
                             continue
+                        # GDB spatial index may be unavailable via vsizip — post-filter by bounds
+                        geom = f.geometry
+                        if geom is None:
+                            continue
+                        all_coords = [c for poly in geom["coordinates"] for ring in poly for c in ring]
+                        if all_coords:
+                            xs = [c[0] for c in all_coords]
+                            ys = [c[1] for c in all_coords]
+                            if (max(xs) < lv95_bbox[0] or min(xs) > lv95_bbox[2] or
+                                    max(ys) < lv95_bbox[1] or min(ys) > lv95_bbox[3]):
+                                continue
                         new_polys = []
                         for ring_list in f["geometry"]["coordinates"]:
                             new_rings = []

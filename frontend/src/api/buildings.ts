@@ -1,7 +1,7 @@
 export type BuildingFeature = {
   type: 'Feature'
   properties: {
-    egid: number
+    egid: number | null
     objektart: string | null
     dach_max: number | null
     gesamthoehe: number | null

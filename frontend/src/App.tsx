@@ -6,9 +6,13 @@ import ParcelPanel from './components/ParcelPanel'
 import AnalysisPanel from './components/AnalysisPanel'
 import { useMapStore, loadPortfolioFromStorage, clearPortfolioStorage } from './store/mapStore'
 import { fetchDownloadedTiles } from './api/tiles'
+import { useAutoTileDownload } from './hooks/useAutoTileDownload'
+import { usePreloadBuildings } from './hooks/usePreloadBuildings'
 
 export default function App() {
   const { analysisMode, setDownloadedTileIds, setPortfolio } = useMapStore()
+  const autoTileStatus = useAutoTileDownload()
+  usePreloadBuildings(autoTileStatus)
 
   useEffect(() => {
     fetchDownloadedTiles().then((tiles) => {
@@ -50,8 +54,8 @@ export default function App() {
       </div>
       <Sidebar />
       <LayerSwitcher />
-      {!analysisMode && <ParcelPanel />}
-      {analysisMode && <AnalysisPanel />}
+      {!analysisMode && <ParcelPanel autoTileStatus={autoTileStatus} />}
+      {analysisMode && <AnalysisPanel autoTileStatus={autoTileStatus} />}
     </div>
   )
 }
