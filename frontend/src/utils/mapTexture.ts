@@ -46,6 +46,24 @@ export function computeMapUrls(parcel: ParcelFeature): {
   }
 }
 
+export function computeMapUrlsFromBbox(
+  minLng: number, minLat: number, maxLng: number, maxLat: number,
+): { swissUrl: string; cadUrl: string; imgW: number; imgH: number } {
+  const [minX, minY] = wgs84ToMercator(minLng, minLat)
+  const [maxX, maxY] = wgs84ToMercator(maxLng, maxLat)
+  const bbox = `${minX},${minY},${maxX},${maxY}`
+  const imgH = 2048
+  const imgW = Math.round(imgH * (maxX - minX) / (maxY - minY))
+  const wmsBase = 'https://wms.geo.admin.ch/?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap'
+  const common  = `&CRS=EPSG:3857&WIDTH=${imgW}&HEIGHT=${imgH}&BBOX=${bbox}&STYLES=`
+  return {
+    swissUrl: `${wmsBase}&LAYERS=ch.swisstopo.swissimage-product&FORMAT=image/jpeg&TRANSPARENT=false${common}`,
+    cadUrl:   `${wmsBase}&LAYERS=ch.kantone.cadastralwebmap-farbe&FORMAT=image/png&TRANSPARENT=true${common}`,
+    imgW,
+    imgH,
+  }
+}
+
 type CachedImages = { egrid: string; swissImg: HTMLImageElement; cadImg: HTMLImageElement }
 let _cache: CachedImages | null = null
 

@@ -7,9 +7,32 @@ import { fetchTerrain, type TerrainGrid } from '../api/terrain'
 import { findBuildingByEGID } from '../api/geoAdmin'
 import { computeMeasurements } from '../utils/buildingMeasurements'
 import { computeSunPosition } from '../utils/solarPosition'
-import { loadImage, computeMapUrls, getPreloadedMapImages } from '../utils/mapTexture'
+import { loadImage, computeMapUrls, computeMapUrlsFromBbox, getPreloadedMapImages } from '../utils/mapTexture'
 import { pointInRing } from '../utils/tileUtils'
 import type { AutoTileStatus } from '../hooks/useAutoTileDownload'
+
+// Centroid of floor-level vertices (min Z ±2 m) for accurate 2-D footprint centre.
+// Using all vertices (including walls/roof) can drift the centroid for complex solids.
+function floorCentroid(coords: [number, number, number][][][]): [number, number] | null {
+  const all = coords.flat(2) as [number, number, number][]
+  if (!all.length) return null
+  const minZ = Math.min(...all.map(c => c[2]))
+  const floor = all.filter(c => c[2] <= minZ + 2)
+  const pts = floor.length ? floor : all
+  return [
+    pts.reduce((s, c) => s + c[0], 0) / pts.length,
+    pts.reduce((s, c) => s + c[1], 0) / pts.length,
+  ]
+}
+
+// Bounding-box fingerprint (5 dp ≈ 1 m) to identify the same physical building
+// across two different backend responses (fetchBuildings vs fetchNeighborBuildings).
+function bboxKey(coords: [number, number, number][][][]): string {
+  const all = coords.flat(2) as [number, number, number][]
+  const lngs = all.map(c => c[0]), lats = all.map(c => c[1])
+  return [Math.min(...lngs), Math.min(...lats), Math.max(...lngs), Math.max(...lats)]
+    .map(v => v.toFixed(5)).join(',')
+}
 
 function filterNullEgidByParcel(
   data: BuildingFeatureCollection,
@@ -17,11 +40,8 @@ function filterNullEgidByParcel(
 ): BuildingFeatureCollection {
   const features = data.features.filter(feat => {
     if (feat.properties.egid != null) return true
-    const all = feat.geometry.coordinates.flat(2) as [number, number, number][]
-    if (!all.length) return false
-    const lng = all.reduce((s, c) => s + c[0], 0) / all.length
-    const lat = all.reduce((s, c) => s + c[1], 0) / all.length
-    return pointInRing(lng, lat, parcelRing)
+    const centroid = floorCentroid(feat.geometry.coordinates)
+    return centroid ? pointInRing(centroid[0], centroid[1], parcelRing) : false
   })
   return { ...data, features }
 }
@@ -354,6 +374,8 @@ export default function BuildingViewer3D({ autoTileStatus }: { autoTileStatus: A
 
     terrainMat = new THREE.MeshLambertMaterial({ color: 0x2a2a2a, side: THREE.FrontSide })
     terrainMatRef.current = terrainMat
+    // Set when using the flat-plane fallback — used by loadMapTexture to pick the right bbox
+    let flatPlaneBbox: [number, number, number, number] | null = null
 
     if (state.terrain) {
       const N = state.terrain.grid_size
@@ -395,21 +417,21 @@ export default function BuildingViewer3D({ autoTileStatus }: { autoTileStatus: A
       terrainMesh.receiveShadow = true
       scene.add(terrainMesh)
     } else {
-      // Flat plane at building floor level with UV mapping matching the terrain bbox
+      // Flat plane sized to the neighbour radius (200 m) — same extent as the neighbour fetch.
+      // Aerial texture is fetched for this bbox so it fills the plane exactly.
       const parcelCoords = (selectedParcel!.geometry.coordinates as [number, number][][]).flat()
       const plngs = parcelCoords.map(c => c[0]), plats = parcelCoords.map(c => c[1])
-      const pMinLng = Math.min(...plngs), pMaxLng = Math.max(...plngs)
-      const pMinLat = Math.min(...plats), pMaxLat = Math.max(...plats)
-      const tpad = 1.5
-      const tMinLng = pMinLng - (pMaxLng - pMinLng) * tpad
-      const tMaxLng = pMaxLng + (pMaxLng - pMinLng) * tpad
-      const tMinLat = pMinLat - (pMaxLat - pMinLat) * tpad
-      const tMaxLat = pMaxLat + (pMaxLat - pMinLat) * tpad
+      const pCx = (Math.min(...plngs) + Math.max(...plngs)) / 2
+      const pCy = (Math.min(...plats) + Math.max(...plats)) / 2
+      const rLat = 200 / 111320
+      const rLon = 200 / (111320 * cosLat)
+      const gMinLng = pCx - rLon, gMaxLng = pCx + rLon
+      const gMinLat = pCy - rLat, gMaxLat = pCy + rLat
       // Scene coords: x=east, z=south (large z = south, small z = north)
-      const fx0 = (tMinLng - originLon) * cosLat * 111320  // west edge
-      const fx1 = (tMaxLng - originLon) * cosLat * 111320  // east edge
-      const fz0 = -(tMinLat - originLat) * 111320          // south edge (large z)
-      const fz1 = -(tMaxLat - originLat) * 111320          // north edge (small z)
+      const fx0 = (gMinLng - originLon) * cosLat * 111320  // west edge
+      const fx1 = (gMaxLng - originLon) * cosLat * 111320  // east edge
+      const fz0 = -(gMinLat - originLat) * 111320           // south edge (large z)
+      const fz1 = -(gMaxLat - originLat) * 111320           // north edge (small z)
       const flatGeo = new THREE.BufferGeometry()
       // SW=(u0,v0), SE=(u1,v0), NW=(u0,v1), NE=(u1,v1)
       flatGeo.setAttribute('position', new THREE.BufferAttribute(
@@ -421,14 +443,19 @@ export default function BuildingViewer3D({ autoTileStatus }: { autoTileStatus: A
       terrainMesh = new THREE.Mesh(flatGeo, terrainMat)
       terrainMesh.receiveShadow = true
       scene.add(terrainMesh)
+      flatPlaneBbox = [gMinLng, gMinLat, gMaxLng, gMaxLat]
     }
 
-    // Always load aerial + cadastral texture onto whichever ground surface we have
+    // Always load aerial + cadastral texture onto whichever ground surface we have.
+    // For the flat plane case, fetch for the plane's own bbox; for terrain, use the preload cache.
     let loadCancelled = false
     const loadMapTexture = async () => {
       try {
-        const { swissUrl, cadUrl, imgW, imgH } = computeMapUrls(selectedParcel!)
-        const cached = getPreloadedMapImages(selectedParcel!.egrid)
+        const urls = flatPlaneBbox
+          ? computeMapUrlsFromBbox(...flatPlaneBbox)
+          : computeMapUrls(selectedParcel!)
+        const { swissUrl, cadUrl, imgW, imgH } = urls
+        const cached = flatPlaneBbox ? null : getPreloadedMapImages(selectedParcel!.egrid)
         const [swissImg, cadImg] = cached
           ? [cached.swissImg, cached.cadImg]
           : await Promise.all([loadImage(swissUrl), loadImage(cadUrl)])
@@ -713,13 +740,19 @@ export default function BuildingViewer3D({ autoTileStatus }: { autoTileStatus: A
 
     const selectedEgids = new Set(selectedGWR.map(b => b.egid))
     const parcelRing = (selectedParcel!.geometry.coordinates as [number, number][][])[0]
+    // Primary exclusion for null-EGID buildings: match against already-displayed buildings
+    // by bounding-box fingerprint — more reliable than polygon containment alone.
+    const displayedKeys = new Set(
+      state.data.features
+        .filter(f => f.properties.egid == null)
+        .map(f => bboxKey(f.geometry.coordinates))
+    )
     for (const feat of neighborData.features) {
       if (selectedEgids.has(String(feat.properties.egid))) continue
       if (feat.properties.egid == null) {
-        const all = feat.geometry.coordinates.flat(2) as [number, number, number][]
-        const lng = all.reduce((s, c) => s + c[0], 0) / all.length
-        const lat = all.reduce((s, c) => s + c[1], 0) / all.length
-        if (pointInRing(lng, lat, parcelRing)) continue
+        if (displayedKeys.has(bboxKey(feat.geometry.coordinates))) continue
+        const centroid = floorCentroid(feat.geometry.coordinates)
+        if (centroid && pointInRing(centroid[0], centroid[1], parcelRing)) continue
       }
       const positions: number[] = []
       for (const poly of feat.geometry.coordinates) {
