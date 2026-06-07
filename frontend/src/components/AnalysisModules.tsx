@@ -468,7 +468,7 @@ function MeasurementsModule() {
                 <MeasurementRow
                   key={egid}
                   m={m}
-                  address={egidToAddress[egid] ?? `EGID ${egid}`}
+                  address={egid > 0 ? (egidToAddress[egid] ?? `EGID ${egid}`) : 'Building (no EGID)'}
                   selected={egid === analysisSelectedEgid}
                   onSelect={() => setAnalysisSelectedEgid(egid)}
                   onHoverEnter={() => { if (egid !== analysisSelectedEgid) setAnalysisHoveredEgid(egid) }}

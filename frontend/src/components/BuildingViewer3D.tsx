@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { useMapStore } from '../store/mapStore'
-import { fetchBuildings, fetchNeighborBuildings, type BuildingFeatureCollection } from '../api/buildings'
+import { fetchBuildings, fetchNeighborBuildings, type BuildingFeature, type BuildingFeatureCollection } from '../api/buildings'
 import { fetchTerrain, type TerrainGrid } from '../api/terrain'
 import { findBuildingByEGID } from '../api/geoAdmin'
 import { computeMeasurements } from '../utils/buildingMeasurements'
@@ -305,6 +305,8 @@ export default function BuildingViewer3D({ autoTileStatus }: { autoTileStatus: A
     })
     defaultMatRef.current = material
     const group = new THREE.Group()
+    const allFeatureMeshes: { feat: BuildingFeature; mesh: THREE.Mesh; key: number }[] = []
+    let syntheticKey = -1
     for (const feat of state.data.features) {
       const positions: number[] = []
       for (const poly of feat.geometry.coordinates) {
@@ -324,7 +326,9 @@ export default function BuildingViewer3D({ autoTileStatus }: { autoTileStatus: A
       mesh.castShadow = true
       mesh.receiveShadow = true
       mesh.userData = { egid: feat.properties.egid, isNeighbor: false }
-      if (feat.properties.egid != null) meshByEgidRef.current.set(feat.properties.egid, mesh)
+      const key = feat.properties.egid ?? syntheticKey--
+      meshByEgidRef.current.set(key, mesh)
+      allFeatureMeshes.push({ feat, mesh, key })
       group.add(mesh)
     }
     scene.add(group)
@@ -539,12 +543,8 @@ export default function BuildingViewer3D({ autoTileStatus }: { autoTileStatus: A
 
     // Compute measurements for each parcel building using 3D mesh + terrain
     const measurements: Record<number, ReturnType<typeof computeMeasurements>> = {}
-    for (const feat of state.data.features) {
-      if (feat.properties.egid == null) continue
-      const mesh = meshByEgidRef.current.get(feat.properties.egid)
-      if (mesh) {
-        measurements[feat.properties.egid] = computeMeasurements(mesh, feat, terrainHeightAt, toLocal)
-      }
+    for (const { feat, mesh, key } of allFeatureMeshes) {
+      measurements[key] = computeMeasurements(mesh, feat, terrainHeightAt, toLocal)
     }
     setBuildingMeasurements(measurements)
 
