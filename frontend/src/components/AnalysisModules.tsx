@@ -1,7 +1,10 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { useMapStore } from '../store/mapStore'
+import type { PortfolioEntry } from '../store/mapStore'
 import type { GwrFeature } from '../api/geoAdmin'
 import type { BuildingMeasurements } from '../utils/buildingMeasurements'
+import { fetchBuildings, fetchNeighborBuildings } from '../api/buildings'
+import type { BuildingFeatureCollection } from '../api/buildings'
 import { computeSunPosition, dayOfYearToLabel } from '../utils/solarPosition'
 import SunShadowCharts from './SunShadowCharts'
 import {
@@ -76,7 +79,7 @@ function Attr({ label, value }: { label: string; value: string | number }) {
 // ─── Parcel summary header ────────────────────────────────────────────────────
 
 function ParcelSummary() {
-  const { selectedParcel, selectedGWR, activeEgids } = useMapStore()
+  const { selectedParcel, selectedGWR, activeEgids, portfolio, addToPortfolio, savePortfolioSnapshot } = useMapStore()
 
   if (!selectedParcel) {
     return (
@@ -84,6 +87,38 @@ function ParcelSummary() {
         <p className="text-[11px] text-white/20 italic">No parcel selected.</p>
       </div>
     )
+  }
+
+  const isInPortfolio = portfolio.some(e => e.parcel.egrid === selectedParcel.egrid)
+
+  const handleAddToPortfolio = () => {
+    if (isInPortfolio) return
+    const entry: PortfolioEntry = {
+      parcel: selectedParcel,
+      buildings: selectedGWR,
+      addedAt: new Date().toISOString(),
+    }
+    addToPortfolio(entry)
+    const egids = selectedGWR.map(b => b.egid).filter(e => e !== '—')
+    const coords = (selectedParcel.geometry.coordinates as [number, number][][]).flat()
+    const lngs = coords.map(c => c[0]), lats = coords.map(c => c[1])
+    const bbox: [number, number, number, number] = [Math.min(...lngs), Math.min(...lats), Math.max(...lngs), Math.max(...lats)]
+    const pad = 1.0
+    const nBbox: [number, number, number, number] = [
+      bbox[0] - (bbox[2] - bbox[0]) * pad, bbox[1] - (bbox[3] - bbox[1]) * pad,
+      bbox[2] + (bbox[2] - bbox[0]) * pad, bbox[3] + (bbox[3] - bbox[1]) * pad,
+    ]
+    const empty: BuildingFeatureCollection = { type: 'FeatureCollection', features: [] }
+    Promise.all([
+      egids.length > 0 ? fetchBuildings(egids, bbox) : Promise.resolve(empty),
+      fetchNeighborBuildings(nBbox).catch(() => empty),
+    ]).then(([buildingGeometries, neighborGeometries]) => {
+      savePortfolioSnapshot(selectedParcel.egrid, {
+        buildingGeometries,
+        neighborGeometries,
+        snapshotAt: new Date().toISOString(),
+      })
+    }).catch(() => {})
   }
 
   const activeGWR = selectedGWR.filter(b => activeEgids.size === 0 || activeEgids.has(Number(b.egid)))
@@ -106,7 +141,30 @@ function ParcelSummary() {
 
   return (
     <div className="px-4 pt-3.5 pb-3 border-b border-white/[0.05]">
-      <p className="text-[9px] font-mono text-white/20 tracking-widest uppercase mb-1">Parcel</p>
+      <div className="flex items-start justify-between">
+        <p className="text-[9px] font-mono text-white/20 tracking-widest uppercase mb-1">Parcel</p>
+        <button
+          onClick={handleAddToPortfolio}
+          title={isInPortfolio ? 'In portfolio' : 'Add to portfolio'}
+          className={`shrink-0 -mt-0.5 w-5 h-5 flex items-center justify-center rounded transition-colors ${
+            isInPortfolio
+              ? 'text-accent/60 cursor-default'
+              : 'text-white/25 hover:text-accent/70 hover:bg-white/[0.06]'
+          }`}
+        >
+          {isInPortfolio ? (
+            <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2.5}
+              strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+              <path d="M20 6L9 17l-5-5" />
+            </svg>
+          ) : (
+            <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2}
+              strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+          )}
+        </button>
+      </div>
       <p className="text-[12px] text-white/75 font-medium leading-tight">
         {selectedParcel.parcelNumber} · {selectedParcel.canton}
       </p>
