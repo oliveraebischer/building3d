@@ -1038,7 +1038,10 @@ function GEAKModule() {
   const { selectedGWR, activeEgids, buildingMeasurements, analysisSelectedEgid, setAnalysisSelectedEgid, setAnalysisHoveredEgid } = useMapStore()
   const [open, setOpen] = useState(false)
 
-  const activeGWR = selectedGWR.filter(b => activeEgids.size === 0 || activeEgids.has(Number(b.egid)))
+  const activeGWR = useMemo(
+    () => selectedGWR.filter(b => activeEgids.size === 0 || activeEgids.has(Number(b.egid))),
+    [selectedGWR, activeEgids],
+  )
 
   // Derive the active building — must be in activeEgids
   const activeBldg: GwrFeature | null = useMemo(() => {
