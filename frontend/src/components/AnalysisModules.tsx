@@ -432,7 +432,7 @@ function MeasurementsModule() {
     : []
 
   const entries = activeEgids.size > 0
-    ? allEntries.filter(({ egid }) => activeEgids.has(egid))
+    ? allEntries.filter(({ egid }) => activeEgids.has(egid) || egid < 0)
     : allEntries
 
   const summary = buildingMeasurements === null
