@@ -1,4 +1,9 @@
 const STAC_BASE = 'https://data.geo.admin.ch/api/stac/v1'
+
+function tileYear(id: string): number {
+  return parseInt(id.match(/3_0_(\d{4})_/)?.[1] ?? '0', 10)
+}
+
 const COLLECTION = 'ch.swisstopo.swissbuildings3d_3_0'
 const TILE_CACHE_KEY = 'building3d_tile_index'
 const TILE_CACHE_TTL = 24 * 60 * 60 * 1000  // 24 h
@@ -59,6 +64,7 @@ export async function fetchAllTiles(): Promise<TileGridFeature[]> {
     url = next?.href ?? null
   }
 
+  features.sort((a, b) => tileYear(b.id) - tileYear(a.id))
   if (features.length > 0) saveTileCache(features)
   return features
 }
@@ -79,6 +85,7 @@ export async function fetchTilesForBbox(
       features.push({ id: item.id, geometry: item.geometry, gdbHref })
     }
   }
+  features.sort((a, b) => tileYear(b.id) - tileYear(a.id))
   return features
 }
 
