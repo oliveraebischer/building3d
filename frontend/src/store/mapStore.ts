@@ -79,6 +79,8 @@ type MapState = {
   setSidebarCollapsed: (v: boolean) => void
   analysisMode: boolean
   setAnalysisMode: (v: boolean) => void
+  helpMode: boolean
+  setHelpMode: (v: boolean) => void
   sidebarResizing: boolean
   setSidebarResizing: (v: boolean) => void
   // Tile downloader
@@ -170,6 +172,8 @@ export const useMapStore = create<MapState>((set, get) => ({
   setSidebarCollapsed: (v) => set({ sidebarCollapsed: v }),
   analysisMode: false,
   setAnalysisMode: (v) => set({ analysisMode: v }),
+  helpMode: false,
+  setHelpMode: (v) => set({ helpMode: v }),
   sidebarResizing: false,
   setSidebarResizing: (v) => set({ sidebarResizing: v }),
   tileGrid: [],

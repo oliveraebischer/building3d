@@ -6,7 +6,7 @@ import { useMapStore } from '../store/mapStore'
 import type { PortfolioEntry } from '../store/mapStore'
 import type { ParcelFeature, GwrFeature } from '../api/geoAdmin'
 import type maplibregl from 'maplibre-gl'
-import { COLLAPSED_W, EXPANDED_W, DATA_W, SEPARATOR_W } from '../constants'
+import { COLLAPSED_W, EXPANDED_W, DATA_W, SEPARATOR_W, HELP_PANEL_W } from '../constants'
 
 const PAD_NONE = { top: 0, bottom: 0, left: 0, right: 0 }
 const RECENT_KEY = 'building3d_recent_searches'
@@ -47,6 +47,17 @@ function GearIcon() {
   )
 }
 
+
+function QuestionMarkCircleIcon() {
+  return (
+    <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2}
+      strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="10" />
+      <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+      <circle cx="12" cy="17" r="0.5" fill="currentColor" />
+    </svg>
+  )
+}
 
 function BriefcaseIcon() {
   return (
@@ -93,6 +104,7 @@ export default function Sidebar() {
     portfolio, portfolioHighlightFn,
     sidebarResizing, setSidebarResizing,
     portfolioPinClickedEgrid,
+    helpMode, setHelpMode,
   } = useMapStore()
 
   const searchBarRef = useRef<SearchBarHandle>(null)
@@ -218,21 +230,59 @@ export default function Sidebar() {
     }
   }
 
+  // ── Guide mode toggle ─────────────────────────────────────────────────────
+  const handleHelpClose = () => {
+    setHelpMode(false)
+    const w = sidebarCollapsed ? COLLAPSED_W : sidebarWidth
+    mapInstance?.easeTo({ padding: { ...PAD_NONE, left: w + SEPARATOR_W }, duration: 500 })
+  }
+
+  const handleHelpClick = () => {
+    if (helpMode) {
+      handleHelpClose()
+    } else {
+      const baseW = portfolioMode || settingsMode ? prevSidebarWidthRef.current : sidebarWidth
+
+      if (portfolioMode) {
+        clearHighlight?.()
+        setSidebarWidth(baseW)
+        setPortfolioMode(false)
+      }
+      if (settingsMode) {
+        if (mapInstance) setCadastral(mapInstance, true)
+        setActiveBaseLayer(prevLayerRef.current)
+        if (prevParcelRef.current) {
+          setParcelResult(prevParcelRef.current, prevGWRRef.current)
+          parcelHighlightFn?.(prevParcelRef.current.geometry)
+        }
+        setSidebarWidth(baseW)
+        setDataMode(false)
+        setSettingsMode(false)
+      }
+
+      setHelpMode(true)
+      const w = sidebarCollapsed ? COLLAPSED_W : baseW
+      mapInstance?.easeTo({ padding: { ...PAD_NONE, left: w + SEPARATOR_W + HELP_PANEL_W }, duration: 500 })
+    }
+  }
+
   // ── Collapse / expand ─────────────────────────────────────────────────────
   const handleToggleCollapse = () => {
+    const extraPad = helpMode ? HELP_PANEL_W : 0
     if (sidebarCollapsed) {
       setSidebarCollapsed(false)
-      mapInstance?.easeTo({ padding: { ...PAD_NONE, left: sidebarWidth + SEPARATOR_W }, duration: 300 })
+      mapInstance?.easeTo({ padding: { ...PAD_NONE, left: sidebarWidth + SEPARATOR_W + extraPad }, duration: 300 })
     } else {
       setSidebarCollapsed(true)
-      mapInstance?.easeTo({ padding: { ...PAD_NONE, left: COLLAPSED_W + SEPARATOR_W }, duration: 300 })
+      mapInstance?.easeTo({ padding: { ...PAD_NONE, left: COLLAPSED_W + SEPARATOR_W + extraPad }, duration: 300 })
     }
   }
 
   const handleSearchIconClick = () => {
     if (sidebarCollapsed) {
       setSidebarCollapsed(false)
-      mapInstance?.easeTo({ padding: { ...PAD_NONE, left: sidebarWidth + SEPARATOR_W }, duration: 300 })
+      const extraPad = helpMode ? HELP_PANEL_W : 0
+      mapInstance?.easeTo({ padding: { ...PAD_NONE, left: sidebarWidth + SEPARATOR_W + extraPad }, duration: 300 })
       setTimeout(() => searchBarRef.current?.focus(), 310)
     } else {
       searchBarRef.current?.focus()
@@ -260,7 +310,8 @@ export default function Sidebar() {
       if (!isDragging.current) return
       const w = Math.max(minW, Math.min(e.clientX, window.innerWidth - 360))
       setSidebarWidth(w)
-      mapInstance?.easeTo({ padding: { ...PAD_NONE, left: w + SEPARATOR_W }, duration: 0 })
+      const extraPad = helpMode ? HELP_PANEL_W : 0
+      mapInstance?.easeTo({ padding: { ...PAD_NONE, left: w + SEPARATOR_W + extraPad }, duration: 0 })
     }
     const onMouseUp = () => {
       if (!isDragging.current) return
@@ -275,7 +326,7 @@ export default function Sidebar() {
       window.removeEventListener('mousemove', onMouseMove)
       window.removeEventListener('mouseup', onMouseUp)
     }
-  }, [mapInstance, setSidebarWidth, setSidebarResizing])
+  }, [mapInstance, setSidebarWidth, setSidebarResizing, helpMode])
 
   const currentWidth = sidebarCollapsed ? COLLAPSED_W : sidebarWidth
 
@@ -325,6 +376,18 @@ export default function Sidebar() {
               aria-label="Portfolio"
             >
               <BriefcaseIcon />
+            </button>
+
+            <button
+              onClick={handleHelpClick}
+              className={`w-9 h-9 flex items-center justify-center rounded-lg transition-colors ${
+                helpMode
+                  ? 'bg-white text-[#0d0d0d]'
+                  : 'text-white/35 hover:text-white hover:bg-white/[0.06]'
+              }`}
+              aria-label="Guide"
+            >
+              <QuestionMarkCircleIcon />
             </button>
 
             <button
@@ -407,6 +470,21 @@ export default function Sidebar() {
             {/* Portfolio panel — inline below Portfolio button */}
             {portfolioMode && <PortfolioPanel />}
 
+            {/* Guide button */}
+            <div className="shrink-0 border-t border-white/[0.07] px-3 pt-1.5 pb-1.5">
+              <button
+                onClick={handleHelpClick}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold tracking-wide transition-colors ${
+                  helpMode
+                    ? 'bg-white text-[#0d0d0d]'
+                    : 'border border-white/[0.08] text-white/50 hover:border-white/20 hover:text-white/80'
+                }`}
+              >
+                <QuestionMarkCircleIcon />
+                Guide
+              </button>
+            </div>
+
             {/* Settings button */}
             <div className="shrink-0 border-t border-white/[0.07] px-3 pt-1.5 pb-3">
               <button
@@ -436,6 +514,7 @@ export default function Sidebar() {
           onMouseDown={onSeparatorMouseDown}
         />
       )}
+
     </>
   )
 }
