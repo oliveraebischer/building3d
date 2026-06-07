@@ -142,11 +142,14 @@ def _compute_measurements_from_coords(egid: int, coords: list, props: dict) -> d
                 # Vertical-ish face → facade
                 facade_m2 += area_3d
 
-    # Find floor ring: ring with lowest average z (in LV95 metres)
+    # Find floor ring: exterior ring (index 0) of the polygon with the lowest avg z.
+    # Interior rings (holes, index 1+) are skipped — they can have a lower avg z than the
+    # actual ground footprint and would produce a wrongly small footprint area.
     floor_ring = None
     min_avg_z = math.inf
-    for pts in all_rings:
-        if len(pts) < 3:
+    for poly in coords:
+        pts = poly[0][:-1] if poly else None  # exterior ring only, drop closing point
+        if not pts or len(pts) < 3:
             continue
         avg_z = sum(c[2] for c in pts) / len(pts)
         if avg_z < min_avg_z:

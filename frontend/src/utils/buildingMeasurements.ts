@@ -131,15 +131,16 @@ export function computeMeasurements(
     }
   }
 
-  // Identify the floor polygon: the polygon ring with minimum average WGS84 Z (elevation)
+  // Identify the floor polygon: the exterior ring (index 0) of the polygon with the lowest avg Z.
+  // Only exterior rings are considered — interior rings (holes) are GeoJSON index 1+ and must be skipped,
+  // otherwise a small interior hole at a slightly lower elevation can be selected instead of the full footprint.
   let floorRing: [number, number, number][] | null = null
   let minAvgZ = Infinity
   for (const poly of feature.geometry.coordinates) {
-    for (const ring of poly) {
-      if (ring.length < 3) continue
-      const avgZ = ring.reduce((s, v) => s + v[2], 0) / ring.length
-      if (avgZ < minAvgZ) { minAvgZ = avgZ; floorRing = ring }
-    }
+    const ring = poly[0]  // exterior ring only
+    if (!ring || ring.length < 3) continue
+    const avgZ = ring.reduce((s, v) => s + v[2], 0) / ring.length
+    if (avgZ < minAvgZ) { minAvgZ = avgZ; floorRing = ring }
   }
 
   let circumferenceM = 0

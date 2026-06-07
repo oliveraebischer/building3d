@@ -423,7 +423,9 @@ export function getDefaultInputs(
   const aEFrom3D = measurements?.footprintM2 != null
     ? measurements.footprintM2 * avgFloors * AE_FACTOR[usage]
     : null
-  const aE = Math.round(aEFrom3D ?? (aEFromGWR > 0 ? aEFromGWR : 300))
+  // GWR footprint is the authoritative registry value — prefer it over the 3D-derived estimate,
+  // which can be inaccurate when the floor ring detection picks the wrong polygon face.
+  const aE = Math.round(aEFromGWR > 0 ? aEFromGWR : (aEFrom3D ?? 300))
 
   return {
     aE,
