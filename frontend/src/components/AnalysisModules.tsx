@@ -145,23 +145,29 @@ function ParcelSummary() {
         <p className="text-[9px] font-mono text-white/20 tracking-widest uppercase mb-1">Parcel</p>
         <button
           onClick={handleAddToPortfolio}
-          title={isInPortfolio ? 'In portfolio' : 'Add to portfolio'}
-          className={`shrink-0 -mt-0.5 w-5 h-5 flex items-center justify-center rounded transition-colors ${
+          disabled={isInPortfolio}
+          className={`shrink-0 -mt-0.5 flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-medium transition-colors ${
             isInPortfolio
               ? 'text-accent/60 cursor-default'
-              : 'text-white/25 hover:text-accent/70 hover:bg-white/[0.06]'
+              : 'text-white/30 hover:text-accent/70 hover:bg-white/[0.06]'
           }`}
         >
           {isInPortfolio ? (
-            <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2.5}
-              strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
-              <path d="M20 6L9 17l-5-5" />
-            </svg>
+            <>
+              <svg className="w-2.5 h-2.5 shrink-0" fill="none" stroke="currentColor" strokeWidth={2.5}
+                strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                <path d="M20 6L9 17l-5-5" />
+              </svg>
+              In portfolio
+            </>
           ) : (
-            <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2}
-              strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
-              <path d="M12 5v14M5 12h14" />
-            </svg>
+            <>
+              <svg className="w-2.5 h-2.5 shrink-0" fill="none" stroke="currentColor" strokeWidth={2}
+                strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              Add to portfolio
+            </>
           )}
         </button>
       </div>
