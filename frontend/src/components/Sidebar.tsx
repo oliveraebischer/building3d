@@ -6,7 +6,7 @@ import { useMapStore } from '../store/mapStore'
 import type { PortfolioEntry } from '../store/mapStore'
 import type { ParcelFeature, GwrFeature } from '../api/geoAdmin'
 import type maplibregl from 'maplibre-gl'
-import { COLLAPSED_W, EXPANDED_W, DATA_W, SEPARATOR_W, HELP_PANEL_W } from '../constants'
+import { COLLAPSED_W, EXPANDED_W, DATA_W, SEPARATOR_W } from '../constants'
 
 const PAD_NONE = { top: 0, bottom: 0, left: 0, right: 0 }
 const RECENT_KEY = 'building3d_recent_searches'
@@ -105,6 +105,7 @@ export default function Sidebar() {
     sidebarResizing, setSidebarResizing,
     portfolioPinClickedEgrid,
     helpMode, setHelpMode,
+    helpPanelWidth,
   } = useMapStore()
 
   const searchBarRef = useRef<SearchBarHandle>(null)
@@ -262,13 +263,13 @@ export default function Sidebar() {
 
       setHelpMode(true)
       const w = sidebarCollapsed ? COLLAPSED_W : baseW
-      mapInstance?.easeTo({ padding: { ...PAD_NONE, left: w + SEPARATOR_W + HELP_PANEL_W }, duration: 500 })
+      mapInstance?.easeTo({ padding: { ...PAD_NONE, left: w + SEPARATOR_W + helpPanelWidth }, duration: 500 })
     }
   }
 
   // ── Collapse / expand ─────────────────────────────────────────────────────
   const handleToggleCollapse = () => {
-    const extraPad = helpMode ? HELP_PANEL_W : 0
+    const extraPad = helpMode ? helpPanelWidth : 0
     if (sidebarCollapsed) {
       setSidebarCollapsed(false)
       mapInstance?.easeTo({ padding: { ...PAD_NONE, left: sidebarWidth + SEPARATOR_W + extraPad }, duration: 300 })
@@ -281,7 +282,7 @@ export default function Sidebar() {
   const handleSearchIconClick = () => {
     if (sidebarCollapsed) {
       setSidebarCollapsed(false)
-      const extraPad = helpMode ? HELP_PANEL_W : 0
+      const extraPad = helpMode ? helpPanelWidth : 0
       mapInstance?.easeTo({ padding: { ...PAD_NONE, left: sidebarWidth + SEPARATOR_W + extraPad }, duration: 300 })
       setTimeout(() => searchBarRef.current?.focus(), 310)
     } else {
@@ -310,7 +311,7 @@ export default function Sidebar() {
       if (!isDragging.current) return
       const w = Math.max(minW, Math.min(e.clientX, window.innerWidth - 360))
       setSidebarWidth(w)
-      const extraPad = helpMode ? HELP_PANEL_W : 0
+      const extraPad = helpMode ? helpPanelWidth : 0
       mapInstance?.easeTo({ padding: { ...PAD_NONE, left: w + SEPARATOR_W + extraPad }, duration: 0 })
     }
     const onMouseUp = () => {

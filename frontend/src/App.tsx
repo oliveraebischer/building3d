@@ -6,14 +6,12 @@ import ParcelPanel from './components/ParcelPanel'
 import AnalysisPanel from './components/AnalysisPanel'
 import HelpPanel from './components/HelpPanel'
 import { useMapStore, loadPortfolioFromStorage, clearPortfolioStorage } from './store/mapStore'
-import { COLLAPSED_W, SEPARATOR_W } from './constants'
 import { fetchDownloadedTiles } from './api/tiles'
 import { useAutoTileDownload } from './hooks/useAutoTileDownload'
 import { usePreloadBuildings } from './hooks/usePreloadBuildings'
 
 export default function App() {
-  const { analysisMode, helpMode, sidebarWidth, sidebarCollapsed, setDownloadedTileIds, setPortfolio } = useMapStore()
-  const helpPanelLeft = (sidebarCollapsed ? COLLAPSED_W : sidebarWidth) + SEPARATOR_W
+  const { analysisMode, helpMode, setDownloadedTileIds, setPortfolio } = useMapStore()
   const autoTileStatus = useAutoTileDownload()
   usePreloadBuildings(autoTileStatus)
 
@@ -59,7 +57,7 @@ export default function App() {
       <LayerSwitcher />
       {!analysisMode && <ParcelPanel autoTileStatus={autoTileStatus} />}
       {analysisMode && <AnalysisPanel autoTileStatus={autoTileStatus} />}
-      {helpMode && <HelpPanel left={helpPanelLeft} />}
+      {helpMode && <HelpPanel />}
     </div>
   )
 }

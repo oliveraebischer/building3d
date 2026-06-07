@@ -1,12 +1,10 @@
-import { useState } from 'react'
-import { HELP_PANEL_W, SEPARATOR_W, COLLAPSED_W } from '../constants'
+import { useState, useRef, useEffect, useCallback } from 'react'
+import { SEPARATOR_W, COLLAPSED_W } from '../constants'
 import { useMapStore } from '../store/mapStore'
 
 const PAD_NONE = { top: 0, bottom: 0, left: 0, right: 0 }
-
-interface HelpPanelProps {
-  left: number
-}
+const MIN_W = 280
+const MAX_W = 620
 
 type FAQItem = { q: string; a: string }
 type Section = { id: string; title: string; comingSoon?: boolean; faqs: FAQItem[] }
@@ -136,16 +134,58 @@ function XIcon() {
   )
 }
 
-export default function HelpPanel({ left }: HelpPanelProps) {
-  const { setHelpMode, mapInstance, sidebarWidth, sidebarCollapsed } = useMapStore()
+export default function HelpPanel() {
+  const {
+    setHelpMode, mapInstance, sidebarWidth, sidebarCollapsed, sidebarResizing,
+    helpPanelWidth, setHelpPanelWidth,
+  } = useMapStore()
+
   const [openSections, setOpenSections] = useState<Set<string>>(new Set(['search']))
   const [openFaqs, setOpenFaqs] = useState<Set<string>>(new Set())
+
+  const panelLeft = sidebarCollapsed ? COLLAPSED_W + SEPARATOR_W : sidebarWidth + SEPARATOR_W
+  const panelLeftRef = useRef(panelLeft)
+  panelLeftRef.current = panelLeft
+  const mapRef = useRef(mapInstance)
+  mapRef.current = mapInstance
+  const isDragging = useRef(false)
 
   function handleClose() {
     setHelpMode(false)
     const w = sidebarCollapsed ? COLLAPSED_W : sidebarWidth
     mapInstance?.easeTo({ padding: { ...PAD_NONE, left: w + SEPARATOR_W }, duration: 500 })
   }
+
+  const onSeparatorMouseDown = useCallback((e: React.MouseEvent) => {
+    isDragging.current = true
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'col-resize'
+    e.preventDefault()
+  }, [])
+
+  useEffect(() => {
+    const onMouseMove = (e: MouseEvent) => {
+      if (!isDragging.current) return
+      const newW = Math.max(MIN_W, Math.min(MAX_W, e.clientX - panelLeftRef.current))
+      setHelpPanelWidth(newW)
+      mapRef.current?.easeTo({
+        padding: { ...PAD_NONE, left: panelLeftRef.current + newW },
+        duration: 0,
+      })
+    }
+    const onMouseUp = () => {
+      if (!isDragging.current) return
+      isDragging.current = false
+      document.body.style.userSelect = ''
+      document.body.style.cursor = ''
+    }
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+    }
+  }, [setHelpPanelWidth])
 
   function toggleSection(id: string) {
     setOpenSections(prev => {
@@ -167,107 +207,116 @@ export default function HelpPanel({ left }: HelpPanelProps) {
 
   return (
     <div
-      className="absolute top-0 bottom-0 z-20 flex flex-col bg-[#0d0d0d]/95 border-r border-white/[0.07] overflow-hidden"
-      style={{ left, width: HELP_PANEL_W }}
+      className="absolute top-0 bottom-0 z-20 flex"
+      style={{
+        left: panelLeft,
+        transition: sidebarResizing ? 'none' : 'left 280ms cubic-bezier(0.4,0,0.2,1)',
+      }}
     >
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.07] shrink-0">
-        <div>
-          <div className="text-white text-sm font-semibold tracking-wide">Guide</div>
-          <div className="text-white/35 text-[10px] mt-0.5">Documentation & FAQs</div>
+      {/* Panel content */}
+      <div
+        className="h-full flex flex-col bg-[#0d0d0d]/95 border-r border-white/[0.07] overflow-hidden"
+        style={{ width: helpPanelWidth }}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.07] shrink-0">
+          <div>
+            <div className="text-white text-sm font-semibold tracking-wide">Guide</div>
+            <div className="text-white/35 text-[10px] mt-0.5">Documentation & FAQs</div>
+          </div>
+          <button
+            onClick={handleClose}
+            className="w-7 h-7 flex items-center justify-center rounded-md text-white/30 hover:text-white hover:bg-white/[0.06] transition-colors"
+            aria-label="Close guide"
+          >
+            <XIcon />
+          </button>
         </div>
-        <button
-          onClick={handleClose}
-          className="w-7 h-7 flex items-center justify-center rounded-md text-white/30 hover:text-white hover:bg-white/[0.06] transition-colors"
-          aria-label="Close guide"
-        >
-          <XIcon />
-        </button>
-      </div>
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto">
-        {SECTIONS.map((section) => {
-          const isOpen = openSections.has(section.id)
-          return (
-            <div key={section.id} className="border-b border-white/[0.05]">
-              {/* Section header */}
-              <button
-                onClick={() => !section.comingSoon && toggleSection(section.id)}
-                className={`w-full flex items-center justify-between px-4 py-3 text-left transition-colors ${
-                  section.comingSoon
-                    ? 'cursor-default'
-                    : 'hover:bg-white/[0.03]'
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <span className={`text-xs font-semibold tracking-wide uppercase ${
-                    section.comingSoon ? 'text-white/25' : 'text-white/70'
-                  }`}>
-                    {section.title}
-                  </span>
-                  {section.comingSoon && (
-                    <span className="text-[9px] uppercase tracking-widest px-1.5 py-0.5 rounded bg-white/[0.06] text-white/25">
-                      Soon
+        {/* Scrollable content */}
+        <div className="flex-1 overflow-y-auto">
+          {SECTIONS.map((section) => {
+            const isOpen = openSections.has(section.id)
+            return (
+              <div key={section.id} className="border-b border-white/[0.05]">
+                <button
+                  onClick={() => !section.comingSoon && toggleSection(section.id)}
+                  className={`w-full flex items-center justify-between px-4 py-3 text-left transition-colors ${
+                    section.comingSoon ? 'cursor-default' : 'hover:bg-white/[0.03]'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs font-semibold tracking-wide uppercase ${
+                      section.comingSoon ? 'text-white/25' : 'text-white/70'
+                    }`}>
+                      {section.title}
+                    </span>
+                    {section.comingSoon && (
+                      <span className="text-[9px] uppercase tracking-widest px-1.5 py-0.5 rounded bg-white/[0.06] text-white/25">
+                        Soon
+                      </span>
+                    )}
+                  </div>
+                  {!section.comingSoon && (
+                    <span className="text-white/25">
+                      <ChevronIcon open={isOpen} />
                     </span>
                   )}
-                </div>
-                {!section.comingSoon && (
-                  <span className="text-white/25">
-                    <ChevronIcon open={isOpen} />
-                  </span>
+                </button>
+
+                {isOpen && !section.comingSoon && (
+                  <div className="pb-2">
+                    {section.faqs.map((faq, fi) => {
+                      const faqKey = `${section.id}-${fi}`
+                      const faqOpen = openFaqs.has(faqKey)
+                      return (
+                        <div key={fi} className="mx-3 mb-1 rounded-lg overflow-hidden">
+                          <button
+                            onClick={() => toggleFaq(faqKey)}
+                            className="w-full flex items-start gap-2 px-3 py-2 text-left hover:bg-white/[0.04] transition-colors rounded-lg"
+                          >
+                            <span className="mt-0.5 shrink-0 text-white/20">
+                              <ChevronIcon open={faqOpen} />
+                            </span>
+                            <span className="text-xs text-white/60 leading-relaxed">{faq.q}</span>
+                          </button>
+                          {faqOpen && (
+                            <div className="px-3 pb-3 pt-0.5">
+                              <p className="text-[11px] text-white/40 leading-relaxed pl-5">
+                                {faq.a}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
                 )}
-              </button>
 
-              {/* FAQ items */}
-              {isOpen && !section.comingSoon && (
-                <div className="pb-2">
-                  {section.faqs.map((faq, fi) => {
-                    const faqKey = `${section.id}-${fi}`
-                    const faqOpen = openFaqs.has(faqKey)
-                    return (
-                      <div key={fi} className="mx-3 mb-1 rounded-lg overflow-hidden">
-                        <button
-                          onClick={() => toggleFaq(faqKey)}
-                          className="w-full flex items-start gap-2 px-3 py-2 text-left hover:bg-white/[0.04] transition-colors rounded-lg"
-                        >
-                          <span className="mt-0.5 shrink-0 text-white/20">
-                            <ChevronIcon open={faqOpen} />
-                          </span>
-                          <span className="text-xs text-white/60 leading-relaxed">{faq.q}</span>
-                        </button>
-                        {faqOpen && (
-                          <div className="px-3 pb-3 pt-0.5">
-                            <p className="text-[11px] text-white/40 leading-relaxed pl-5">
-                              {faq.a}
-                            </p>
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
+                {section.comingSoon && (
+                  <div className="px-4 pb-4">
+                    <p className="text-[11px] text-white/25 leading-relaxed">
+                      {section.faqs[0]?.a}
+                    </p>
+                  </div>
+                )}
+              </div>
+            )
+          })}
 
-              {/* Coming soon content */}
-              {section.comingSoon && (
-                <div className="px-4 pb-4">
-                  <p className="text-[11px] text-white/25 leading-relaxed">
-                    {section.faqs[0]?.a}
-                  </p>
-                </div>
-              )}
-            </div>
-          )
-        })}
-
-        {/* Footer */}
-        <div className="px-4 py-5 text-center">
-          <p className="text-[10px] text-white/20 leading-relaxed">
-            Data sourced from swisstopo GWR, SwissBUILDINGS3D 3.0 and federal registries.
-          </p>
+          <div className="px-4 py-5 text-center">
+            <p className="text-[10px] text-white/20 leading-relaxed">
+              Data sourced from swisstopo GWR, SwissBUILDINGS3D 3.0 and federal registries.
+            </p>
+          </div>
         </div>
       </div>
+
+      {/* Draggable right separator */}
+      <div
+        className="w-1 h-full cursor-col-resize bg-white/[0.07] hover:bg-white/20 shrink-0 transition-colors"
+        onMouseDown={onSeparatorMouseDown}
+      />
     </div>
   )
 }

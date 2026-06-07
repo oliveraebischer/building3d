@@ -81,6 +81,8 @@ type MapState = {
   setAnalysisMode: (v: boolean) => void
   helpMode: boolean
   setHelpMode: (v: boolean) => void
+  helpPanelWidth: number
+  setHelpPanelWidth: (w: number) => void
   sidebarResizing: boolean
   setSidebarResizing: (v: boolean) => void
   // Tile downloader
@@ -174,6 +176,8 @@ export const useMapStore = create<MapState>((set, get) => ({
   setAnalysisMode: (v) => set({ analysisMode: v }),
   helpMode: false,
   setHelpMode: (v) => set({ helpMode: v }),
+  helpPanelWidth: 380,
+  setHelpPanelWidth: (w) => set({ helpPanelWidth: w }),
   sidebarResizing: false,
   setSidebarResizing: (v) => set({ sidebarResizing: v }),
   tileGrid: [],
