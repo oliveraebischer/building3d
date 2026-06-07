@@ -72,6 +72,7 @@ export default function BuildingViewer3D({ autoTileStatus }: { autoTileStatus: A
   const {
     selectedParcel, selectedGWR,
     analysisSelectedEgid, analysisHoveredEgid,
+    activeEgids,
     setBuildingMeasurements, clearBuildingMeasurements,
     sunDayOfYear, sunHourOfDay,
     portfolioSnapshotGeometries, setPortfolioSnapshotGeometries,
@@ -118,10 +119,13 @@ export default function BuildingViewer3D({ autoTileStatus }: { autoTileStatus: A
   const defaultMatRef           = useRef<THREE.MeshPhongMaterial | null>(null)
   const highlightMatRef         = useRef<THREE.MeshPhongMaterial | null>(null)
   const panelSelectMatRef       = useRef<THREE.MeshPhongMaterial | null>(null)
+  const inactiveMatRef          = useRef<THREE.MeshPhongMaterial | null>(null)
   const analysisSelectedEgidRef = useRef<number | null>(null)
   analysisSelectedEgidRef.current = analysisSelectedEgid
   const analysisHoveredEgidRef  = useRef<number | null>(null)
   analysisHoveredEgidRef.current  = analysisHoveredEgid
+  const activeEgidsRef          = useRef<Set<number>>(new Set())
+  activeEgidsRef.current        = activeEgids
 
   // Fetch building geometry + terrain when parcel/buildings change
   useEffect(() => {
@@ -364,6 +368,16 @@ export default function BuildingViewer3D({ autoTileStatus }: { autoTileStatus: A
     })
     panelSelectMatRef.current = panelSelectMat
 
+    const inactiveMat = new THREE.MeshPhongMaterial({
+      color: 0x142030,
+      transparent: true,
+      opacity: 0.28,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      flatShading: true,
+    })
+    inactiveMatRef.current = inactiveMat
+
     // Ground surface — elevation mesh when available, flat plane otherwise
     // LV95 is metric: E-centerE→X, elev-minZ→Y, -(N-centerN)→Z
     let terrainMesh: THREE.Mesh | null = null
@@ -580,14 +594,22 @@ export default function BuildingViewer3D({ autoTileStatus }: { autoTileStatus: A
         // panel-selected: material was not changed by mouse hover, just clear tracker
       } else if (egid === analysisHoveredEgidRef.current) {
         // panel-hovered: keep panel hover material, just clear tracker
+      } else if (!isNeighbor && activeEgidsRef.current.size > 0 && !activeEgidsRef.current.has(egid)) {
+        hoveredMesh.material = inactiveMatRef.current ?? material
       } else {
         hoveredMesh.material = isNeighbor ? neighborMat : material
       }
       hoveredMesh = null
     }
     const applyHighlight = (mesh: THREE.Mesh) => {
-      if (mesh.userData.egid === analysisSelectedEgidRef.current) {
+      const egid = mesh.userData.egid as number
+      if (egid === analysisSelectedEgidRef.current) {
         // already at strongest highlight; don't dim it, but track for leave
+        hoveredMesh = mesh
+        return
+      }
+      // Inactive buildings don't respond to mouse hover
+      if (!mesh.userData.isNeighbor && activeEgidsRef.current.size > 0 && !activeEgidsRef.current.has(egid)) {
         hoveredMesh = mesh
         return
       }
@@ -687,6 +709,7 @@ export default function BuildingViewer3D({ autoTileStatus }: { autoTileStatus: A
       material.dispose()
       highlightMat.dispose()
       panelSelectMat.dispose()
+      inactiveMat.dispose()
       meshByEgidRef.current.clear()
       clearBuildingMeasurements()
       dirLightRef.current = null
@@ -694,6 +717,7 @@ export default function BuildingViewer3D({ autoTileStatus }: { autoTileStatus: A
       defaultMatRef.current = null
       highlightMatRef.current = null
       panelSelectMatRef.current = null
+      inactiveMatRef.current = null
       if (terrainMesh) {
         ;(terrainMesh as THREE.Mesh & { _cancelLoad?: () => void })._cancelLoad?.()
         terrainMesh.geometry.dispose()
@@ -808,15 +832,18 @@ export default function BuildingViewer3D({ autoTileStatus }: { autoTileStatus: A
     if (rendererRef.current) rendererRef.current.shadowMap.needsUpdate = true
   }, [sunDayOfYear, sunHourOfDay, state.status]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Apply panel building highlights whenever selected/hovered egid changes
+  // Apply panel building highlights + filter dimming whenever state changes
   useEffect(() => {
     if (state.status !== 'ready') return
     const meshMap = meshByEgidRef.current
     if (!meshMap.size) return
     const selEgid = analysisSelectedEgid
     const hovEgid = analysisHoveredEgid
+    const isActive = (id: number) => activeEgids.size === 0 || activeEgids.has(id)
     meshMap.forEach((mesh, egid) => {
-      if (egid === selEgid && panelSelectMatRef.current) {
+      if (!isActive(egid)) {
+        mesh.material = inactiveMatRef.current ?? defaultMatRef.current!
+      } else if (egid === selEgid && panelSelectMatRef.current) {
         mesh.material = panelSelectMatRef.current
       } else if (egid === hovEgid && highlightMatRef.current) {
         mesh.material = highlightMatRef.current
@@ -824,7 +851,7 @@ export default function BuildingViewer3D({ autoTileStatus }: { autoTileStatus: A
         mesh.material = defaultMatRef.current
       }
     })
-  }, [analysisSelectedEgid, analysisHoveredEgid, state.status]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [analysisSelectedEgid, analysisHoveredEgid, activeEgids, state.status]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Preload neighbours as soon as the scene is ready — before the toggle is clicked
   useEffect(() => {

@@ -76,7 +76,7 @@ function Attr({ label, value }: { label: string; value: string | number }) {
 // ─── Parcel summary header ────────────────────────────────────────────────────
 
 function ParcelSummary() {
-  const { selectedParcel, selectedGWR } = useMapStore()
+  const { selectedParcel, selectedGWR, activeEgids } = useMapStore()
 
   if (!selectedParcel) {
     return (
@@ -86,17 +86,23 @@ function ParcelSummary() {
     )
   }
 
-  const totalFootprint = selectedGWR.reduce((s, b) => s + (b.footprintM2 ?? 0), 0)
-  const years = selectedGWR.map(b => b.constructionYear).filter((y): y is number => y != null)
+  const activeGWR = selectedGWR.filter(b => activeEgids.size === 0 || activeEgids.has(Number(b.egid)))
+
+  const totalFootprint = activeGWR.reduce((s, b) => s + (b.footprintM2 ?? 0), 0)
+  const years = activeGWR.map(b => b.constructionYear).filter((y): y is number => y != null)
   const minYear = years.length ? Math.min(...years) : null
   const maxYear = years.length ? Math.max(...years) : null
   const yearStr = minYear === maxYear ? `${minYear}` : minYear && maxYear ? `${minYear}–${maxYear}` : null
 
   const catCounts: Record<string, number> = {}
-  selectedGWR.forEach(b => {
+  activeGWR.forEach(b => {
     if (b.category && b.category !== '—') catCounts[b.category] = (catCounts[b.category] ?? 0) + 1
   })
   const dominantCat = Object.entries(catCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
+
+  const buildingCountLabel = selectedGWR.length > 1 && activeEgids.size < selectedGWR.length
+    ? `${activeGWR.length} / ${selectedGWR.length} buildings`
+    : `${activeGWR.length} building${activeGWR.length !== 1 ? 's' : ''}`
 
   return (
     <div className="px-4 pt-3.5 pb-3 border-b border-white/[0.05]">
@@ -110,15 +116,79 @@ function ParcelSummary() {
       )}
       <div className="flex flex-wrap gap-x-3 gap-y-0.5">
         {selectedGWR.length > 0 && (
-          <span className="text-[10px] text-white/25">
-            {selectedGWR.length} building{selectedGWR.length !== 1 ? 's' : ''}
-          </span>
+          <span className="text-[10px] text-white/25">{buildingCountLabel}</span>
         )}
         {totalFootprint > 0 && (
           <span className="text-[10px] text-white/25">{totalFootprint} m²</span>
         )}
         {yearStr && (
           <span className="text-[10px] text-white/25">Built {yearStr}</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── EGID filter bar ──────────────────────────────────────────────────────────
+
+function EgidFilterBar() {
+  const { selectedGWR, activeEgids, setActiveEgids, toggleActiveEgid } = useMapStore()
+
+  if (selectedGWR.length <= 1) return null
+
+  const allActive = activeEgids.size === selectedGWR.length
+
+  const toggleAll = () => {
+    if (allActive) {
+      // deselect all → keep at least first one active to avoid empty state
+      setActiveEgids(new Set([Number(selectedGWR[0]?.egid)].filter(id => id > 0)))
+    } else {
+      setActiveEgids(new Set(selectedGWR.map(b => Number(b.egid)).filter(id => id > 0)))
+    }
+  }
+
+  return (
+    <div className="border-b border-white/[0.05] px-3 py-2">
+      <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none pb-0.5">
+        {/* All pill */}
+        <button
+          onClick={toggleAll}
+          className={`shrink-0 px-2 py-0.5 rounded-full border text-[9px] font-medium transition-colors ${
+            allActive
+              ? 'bg-accent/15 text-accent border-accent/30'
+              : 'bg-white/[0.04] text-white/30 border-white/[0.08] hover:text-white/50'
+          }`}
+        >
+          All
+        </button>
+
+        {/* Per-building pills */}
+        {selectedGWR.map(b => {
+          const id = Number(b.egid)
+          const active = activeEgids.has(id)
+          const rawLabel = b.address !== '—' ? b.address : `EGID ${b.egid}`
+          const label = rawLabel.length > 14 ? rawLabel.slice(0, 13) + '…' : rawLabel
+          return (
+            <button
+              key={b.egid}
+              onClick={() => toggleActiveEgid(id)}
+              title={`EGID ${b.egid}${b.address !== '—' ? ' · ' + b.address : ''}`}
+              className={`shrink-0 px-2 py-0.5 rounded-full border text-[9px] transition-colors ${
+                active
+                  ? 'bg-accent/15 text-accent border-accent/30'
+                  : 'bg-white/[0.04] text-white/20 border-white/[0.06] hover:text-white/40'
+              }`}
+            >
+              {label}
+            </button>
+          )
+        })}
+
+        {/* Active count */}
+        {!allActive && (
+          <span className="shrink-0 text-[9px] text-white/20 ml-0.5">
+            {activeEgids.size} / {selectedGWR.length}
+          </span>
         )}
       </div>
     </div>
@@ -201,24 +271,36 @@ function BuildingItem({
 
 function BuildingsModule() {
   const {
-    selectedGWR,
+    selectedGWR, activeEgids,
     setAnalysisSelectedEgid,
     setAnalysisHoveredEgid,
   } = useMapStore()
 
+  const activeGWR = selectedGWR.filter(b => activeEgids.size === 0 || activeEgids.has(Number(b.egid)))
+
   const [open, setOpen] = useState(false)
   const [selectedEgid, setSelectedEgid] = useState<string | null>(
-    selectedGWR[0]?.egid ?? null
+    activeGWR[0]?.egid ?? null
   )
   const prevLengthRef = useRef(selectedGWR.length)
 
   useEffect(() => {
-    const first = selectedGWR[0]?.egid ?? null
+    const first = activeGWR[0]?.egid ?? null
     setSelectedEgid(first)
     setAnalysisSelectedEgid(first && first !== '—' ? Number(first) : null)
     if (selectedGWR.length > 0 && prevLengthRef.current === 0) setOpen(true)
     prevLengthRef.current = selectedGWR.length
   }, [selectedGWR]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // When filter changes, ensure selected building is still active
+  useEffect(() => {
+    const currentId = selectedEgid ? Number(selectedEgid) : null
+    if (currentId && !activeEgids.has(currentId)) {
+      const first = activeGWR[0]?.egid ?? null
+      setSelectedEgid(first)
+      setAnalysisSelectedEgid(first && first !== '—' ? Number(first) : null)
+    }
+  }, [activeEgids]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     return () => {
@@ -241,7 +323,7 @@ function BuildingsModule() {
 
   const summary = selectedGWR.length === 0
     ? 'Select a parcel'
-    : `${selectedGWR.length} building${selectedGWR.length !== 1 ? 's' : ''}`
+    : `${activeGWR.length} building${activeGWR.length !== 1 ? 's' : ''}`
 
   return (
     <div className="border-b border-white/[0.05]">
@@ -261,8 +343,10 @@ function BuildingsModule() {
         <div>
           {selectedGWR.length === 0 ? (
             <p className="px-4 pb-4 pt-1 text-[11px] text-white/20 italic">No parcel selected.</p>
+          ) : activeGWR.length === 0 ? (
+            <p className="px-4 pb-4 pt-1 text-[11px] text-white/20 italic">No buildings active.</p>
           ) : (
-            selectedGWR.map(b => (
+            activeGWR.map(b => (
               <BuildingItem
                 key={b.egid}
                 building={b}
@@ -282,17 +366,19 @@ function BuildingsModule() {
 // ─── Measurements module ──────────────────────────────────────────────────────
 
 function MeasurementRow({
-  m, address, selected, onHoverEnter, onHoverLeave,
+  m, address, selected, onSelect, onHoverEnter, onHoverLeave,
 }: {
   m: BuildingMeasurements
   address: string
   selected: boolean
+  onSelect: () => void
   onHoverEnter: () => void
   onHoverLeave: () => void
 }) {
   return (
     <div
-      className={`border-b border-white/[0.04] last:border-0 transition-colors ${selected ? 'bg-accent/[0.07]' : ''}`}
+      className={`border-b border-white/[0.04] last:border-0 transition-colors cursor-pointer ${selected ? 'bg-accent/[0.07]' : 'hover:bg-white/[0.03]'}`}
+      onClick={onSelect}
       onMouseEnter={onHoverEnter}
       onMouseLeave={onHoverLeave}
     >
@@ -312,17 +398,42 @@ function MeasurementRow({
   )
 }
 
+function MeasurementTotalRow({ entries }: { entries: { egid: number; m: BuildingMeasurements }[] }) {
+  if (entries.length < 2) return null
+  const vol  = entries.reduce((s, e) => s + e.m.volumeM3,      0)
+  const fac  = entries.reduce((s, e) => s + e.m.facadeM2,      0)
+  const roof = entries.reduce((s, e) => s + e.m.roofM2,        0)
+  const circ = entries.reduce((s, e) => s + e.m.circumferenceM,0)
+  const fp   = entries.reduce((s, e) => s + e.m.footprintM2,   0)
+  return (
+    <div className="px-4 py-2.5 border-t border-white/[0.07] bg-white/[0.02]">
+      <p className="text-[10px] text-white/30 font-medium mb-1.5">Total · {entries.length} buildings</p>
+      <div className="divide-y divide-white/[0.03]">
+        <Attr label="Volume"        value={`${vol.toFixed(1)} m³`} />
+        <Attr label="Facade"        value={`${fac.toFixed(1)} m²`} />
+        <Attr label="Roof area"     value={`${roof.toFixed(1)} m²`} />
+        <Attr label="Circumference" value={`${circ.toFixed(1)} m`} />
+        <Attr label="Footprint"     value={`${fp.toFixed(1)} m²`} />
+      </div>
+    </div>
+  )
+}
+
 function MeasurementsModule() {
-  const { selectedGWR, buildingMeasurements, setAnalysisHoveredEgid, analysisSelectedEgid } = useMapStore()
+  const { selectedGWR, activeEgids, buildingMeasurements, analysisSelectedEgid, setAnalysisSelectedEgid, setAnalysisHoveredEgid } = useMapStore()
   const [open, setOpen] = useState(false)
 
   const egidToAddress = Object.fromEntries(
     selectedGWR.map(b => [Number(b.egid), b.address !== '—' ? b.address : `EGID ${b.egid}`])
   )
 
-  const entries = buildingMeasurements
+  const allEntries = buildingMeasurements
     ? Object.entries(buildingMeasurements).map(([egid, m]) => ({ egid: Number(egid), m }))
     : []
+
+  const entries = activeEgids.size > 0
+    ? allEntries.filter(({ egid }) => activeEgids.has(egid))
+    : allEntries
 
   const summary = buildingMeasurements === null
     ? 'Loading from 3D model…'
@@ -352,16 +463,20 @@ function MeasurementsModule() {
           ) : entries.length === 0 ? (
             <p className="px-4 pb-4 pt-1 text-[11px] text-white/20 italic">No 3D data available.</p>
           ) : (
-            entries.map(({ egid, m }) => (
-              <MeasurementRow
-                key={egid}
-                m={m}
-                address={egidToAddress[egid] ?? `EGID ${egid}`}
-                selected={egid === analysisSelectedEgid}
-                onHoverEnter={() => { if (egid !== analysisSelectedEgid) setAnalysisHoveredEgid(egid) }}
-                onHoverLeave={() => setAnalysisHoveredEgid(null)}
-              />
-            ))
+            <>
+              {entries.map(({ egid, m }) => (
+                <MeasurementRow
+                  key={egid}
+                  m={m}
+                  address={egidToAddress[egid] ?? `EGID ${egid}`}
+                  selected={egid === analysisSelectedEgid}
+                  onSelect={() => setAnalysisSelectedEgid(egid)}
+                  onHoverEnter={() => { if (egid !== analysisSelectedEgid) setAnalysisHoveredEgid(egid) }}
+                  onHoverLeave={() => setAnalysisHoveredEgid(null)}
+                />
+              ))}
+              <MeasurementTotalRow entries={entries} />
+            </>
           )}
         </div>
       )}
@@ -381,7 +496,9 @@ function SunShadowModule() {
   const {
     sunDayOfYear, setSunDayOfYear,
     sunHourOfDay, setSunHourOfDay,
-    selectedParcel,
+    selectedParcel, selectedGWR, activeEgids,
+    buildingMeasurements,
+    analysisSelectedEgid, setAnalysisSelectedEgid, setAnalysisHoveredEgid,
   } = useMapStore()
   const [open, setOpen] = useState(false)
 
@@ -473,6 +590,50 @@ function SunShadowModule() {
               hourOfDay={sunHourOfDay}
             />
           )}
+
+          {/* Per-building facade exposure */}
+          {latLon && (() => {
+            const activeGWR = selectedGWR.filter(b => activeEgids.size === 0 || activeEgids.has(Number(b.egid)))
+            if (activeGWR.length < 2 && !buildingMeasurements) return null
+            const rows = activeGWR.map(b => {
+              const egid = Number(b.egid)
+              const facadeM2 = buildingMeasurements?.[egid]?.facadeM2 ?? null
+              return { egid, address: b.address !== '—' ? b.address : `EGID ${b.egid}`, facadeM2 }
+            })
+            const totalFacade = rows.reduce((s, r) => s + (r.facadeM2 ?? 0), 0)
+            return (
+              <div>
+                <p className="text-[9px] text-white/20 uppercase tracking-widest mb-2">Facade exposure per building</p>
+                <div className="divide-y divide-white/[0.04] rounded overflow-hidden border border-white/[0.04]">
+                  {rows.map(row => {
+                    const sel = row.egid === analysisSelectedEgid
+                    return (
+                      <div
+                        key={row.egid}
+                        onClick={() => setAnalysisSelectedEgid(row.egid)}
+                        onMouseEnter={() => { if (row.egid !== analysisSelectedEgid) setAnalysisHoveredEgid(row.egid) }}
+                        onMouseLeave={() => setAnalysisHoveredEgid(null)}
+                        className={`px-3 py-2 cursor-pointer transition-colors ${sel ? 'bg-accent/[0.07]' : 'hover:bg-white/[0.03]'}`}
+                      >
+                        <p className={`text-[10px] font-medium truncate ${sel ? 'text-accent' : 'text-white/55'}`}>
+                          {row.address}
+                        </p>
+                        {row.facadeM2 != null && (
+                          <span className="text-[9px] text-white/30">{row.facadeM2.toFixed(0)} m² facade</span>
+                        )}
+                      </div>
+                    )
+                  })}
+                  {rows.length >= 2 && totalFacade > 0 && (
+                    <div className="px-3 py-2 bg-white/[0.02]">
+                      <p className="text-[10px] text-white/30 font-medium">Total · {rows.length} buildings</p>
+                      <span className="text-[9px] text-white/25">{totalFacade.toFixed(0)} m² facade</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )
+          })()}
         </div>
       )}
     </div>
@@ -494,10 +655,12 @@ function energyTag(source: string): 'renewable' | 'fossil' | 'other' {
 }
 
 function EnergyModule() {
-  const { selectedGWR } = useMapStore()
+  const { selectedGWR, activeEgids, analysisSelectedEgid, setAnalysisSelectedEgid, setAnalysisHoveredEgid } = useMapStore()
   const [open, setOpen] = useState(false)
 
-  const withData = selectedGWR.filter(b =>
+  const activeGWR = selectedGWR.filter(b => activeEgids.size === 0 || activeEgids.has(Number(b.egid)))
+
+  const withData = activeGWR.filter(b =>
     b.heatingSystem !== '—' || b.energySourceHeating !== '—' || b.energySourceHotWater !== '—'
   )
 
@@ -506,7 +669,9 @@ function EnergyModule() {
 
   const summary = withData.length === 0
     ? selectedGWR.length === 0 ? 'No parcel selected' : 'No data'
-    : `${withData.length} building${withData.length !== 1 ? 's' : ''}`
+    : activeEgids.size < selectedGWR.length
+      ? `${withData.length} / ${selectedGWR.length} building${selectedGWR.length !== 1 ? 's' : ''}`
+      : `${withData.length} building${withData.length !== 1 ? 's' : ''}`
 
   return (
     <div className="border-b border-white/[0.05]">
@@ -526,7 +691,7 @@ function EnergyModule() {
         <div>
           {withData.length === 0 ? (
             <p className="px-4 pb-4 pt-1 text-[11px] text-white/20 italic">
-              {selectedGWR.length === 0 ? 'No parcel selected.' : 'No energy data available.'}
+              {selectedGWR.length === 0 ? 'No parcel selected.' : activeGWR.length === 0 ? 'No buildings active.' : 'No energy data available.'}
             </p>
           ) : (
             <>
@@ -546,10 +711,18 @@ function EnergyModule() {
               )}
               {withData.map((b, i) => {
                 const tag = energyTag(b.energySourceHeating)
+                const egid = Number(b.egid)
+                const sel = egid === analysisSelectedEgid
                 return (
-                  <div key={b.egid} className="border-b border-white/[0.04] last:border-0 px-4 py-2.5">
+                  <div
+                    key={b.egid}
+                    onClick={() => setAnalysisSelectedEgid(egid)}
+                    onMouseEnter={() => { if (egid !== analysisSelectedEgid) setAnalysisHoveredEgid(egid) }}
+                    onMouseLeave={() => setAnalysisHoveredEgid(null)}
+                    className={`border-b border-white/[0.04] last:border-0 px-4 py-2.5 cursor-pointer transition-colors ${sel ? 'bg-accent/[0.07]' : 'hover:bg-white/[0.03]'}`}
+                  >
                     <div className="flex items-center gap-1.5 mb-1">
-                      <p className="text-[11px] text-white/55 truncate flex-1">
+                      <p className={`text-[11px] truncate flex-1 ${sel ? 'text-accent' : 'text-white/55'}`}>
                         {b.address !== '—' ? b.address : `Building ${i + 1}`}
                       </p>
                       {tag !== 'other' && (
@@ -862,21 +1035,23 @@ function BerechnungsmodellDetail({ inputs, results }: { inputs: GEAKInputs; resu
 }
 
 function GEAKModule() {
-  const { selectedGWR, buildingMeasurements, analysisSelectedEgid } = useMapStore()
+  const { selectedGWR, activeEgids, buildingMeasurements, analysisSelectedEgid, setAnalysisSelectedEgid, setAnalysisHoveredEgid } = useMapStore()
   const [open, setOpen] = useState(false)
 
-  // Derive the active building
-  const activeBldg: GwrFeature | null = useMemo(() => {
-    if (analysisSelectedEgid != null) {
-      return selectedGWR.find(b => Number(b.egid) === analysisSelectedEgid) ?? selectedGWR[0] ?? null
-    }
-    return selectedGWR[0] ?? null
-  }, [selectedGWR, analysisSelectedEgid])
+  const activeGWR = selectedGWR.filter(b => activeEgids.size === 0 || activeEgids.has(Number(b.egid)))
 
-  // Aggregate 3D measurements across ALL buildings on the parcel
+  // Derive the active building — must be in activeEgids
+  const activeBldg: GwrFeature | null = useMemo(() => {
+    if (analysisSelectedEgid != null && (activeEgids.size === 0 || activeEgids.has(analysisSelectedEgid))) {
+      return selectedGWR.find(b => Number(b.egid) === analysisSelectedEgid) ?? activeGWR[0] ?? null
+    }
+    return activeGWR[0] ?? null
+  }, [selectedGWR, activeGWR, analysisSelectedEgid, activeEgids]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Aggregate 3D measurements across active buildings only
   const aggregatedMeasurements: BuildingMeasurements | null = useMemo(() => {
-    if (!buildingMeasurements || selectedGWR.length === 0) return null
-    const all = selectedGWR
+    if (!buildingMeasurements || activeGWR.length === 0) return null
+    const all = activeGWR
       .map(b => buildingMeasurements[Number(b.egid)])
       .filter((m): m is BuildingMeasurements => m != null)
     if (all.length === 0) return null
@@ -887,16 +1062,16 @@ function GEAKModule() {
       circumferenceM: all.reduce((s, m) => s + m.circumferenceM, 0),
       footprintM2:   all.reduce((s, m) => s + m.footprintM2, 0),
     }
-  }, [buildingMeasurements, selectedGWR])
+  }, [buildingMeasurements, activeGWR])
 
   const [inputs, setInputs] = useState<GEAKInputs>(() =>
-    getDefaultInputs(activeBldg, aggregatedMeasurements, selectedGWR)
+    getDefaultInputs(activeBldg, aggregatedMeasurements, activeGWR)
   )
 
-  // Re-derive defaults when active building, all buildings, or measurements change
+  // Re-derive defaults when active building, active buildings, or measurements change
   useEffect(() => {
-    setInputs(getDefaultInputs(activeBldg, aggregatedMeasurements, selectedGWR))
-  }, [activeBldg, aggregatedMeasurements, selectedGWR]) // eslint-disable-line react-hooks/exhaustive-deps
+    setInputs(getDefaultInputs(activeBldg, aggregatedMeasurements, activeGWR))
+  }, [activeBldg, aggregatedMeasurements, activeGWR]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const results = useMemo(() => calculateGEAK(inputs), [inputs])
 
@@ -941,8 +1116,58 @@ function GEAKModule() {
             <p className="text-[11px] text-white/20 italic pt-1">No parcel selected.</p>
           ) : (
             <>
+              {/* Per-building estimates */}
+              {activeGWR.length >= 2 && (
+                <div className="pt-1 space-y-1">
+                  <p className="text-[9px] text-white/20 uppercase tracking-widest mb-2">Per building (defaults)</p>
+                  <div className="divide-y divide-white/[0.04] rounded overflow-hidden border border-white/[0.04]">
+                    {activeGWR.map(b => {
+                      const egid = Number(b.egid)
+                      const bMeas = buildingMeasurements?.[egid] ?? null
+                      const bInputs = getDefaultInputs(b, bMeas, [b])
+                      const bResults = calculateGEAK(bInputs)
+                      const sel = egid === analysisSelectedEgid
+                      return (
+                        <div
+                          key={b.egid}
+                          onClick={() => setAnalysisSelectedEgid(egid)}
+                          onMouseEnter={() => { if (egid !== analysisSelectedEgid) setAnalysisHoveredEgid(egid) }}
+                          onMouseLeave={() => setAnalysisHoveredEgid(null)}
+                          className={`px-3 py-2 cursor-pointer transition-colors ${sel ? 'bg-accent/[0.07]' : 'hover:bg-white/[0.03]'}`}
+                        >
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <p className={`text-[10px] font-medium truncate flex-1 ${sel ? 'text-accent' : 'text-white/55'}`}>
+                              {b.address !== '—' ? b.address : `EGID ${b.egid}`}
+                            </p>
+                            <div className="flex gap-0.5 shrink-0">
+                              {[bResults.classHuelle, bResults.classGesamt, bResults.classCO2].map((cls, i) => (
+                                <span
+                                  key={i}
+                                  style={{ backgroundColor: GEAK_CLASS_COLORS[cls] + '33', color: GEAK_CLASS_COLORS[cls] }}
+                                  className="text-[8px] font-bold px-1 py-px rounded"
+                                >
+                                  {cls}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap gap-x-3 gap-y-0.5">
+                            <span className="text-[9px] text-white/25">A_E {bInputs.aE} m²</span>
+                            <span className="text-[9px] text-white/25">Q_H {bResults.qHEff} kWh/(m²·a)</span>
+                            <span className="text-[9px] text-white/25">E_gew {bResults.eGew} kWh/(m²·a)</span>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
               {/* Results */}
               <div className="space-y-3 pt-1">
+                {activeGWR.length >= 2 && (
+                  <p className="text-[9px] text-white/20 uppercase tracking-widest -mb-1">Combined (editable)</p>
+                )}
                 <div className="space-y-1">
                   <p className="text-[9px] text-white/25 uppercase tracking-widest">Gebäudehülle</p>
                   <GEAKScaleBar
@@ -1098,6 +1323,7 @@ export default function AnalysisModules() {
     <div className="h-full flex flex-col bg-[#080808] overflow-hidden">
       <div className="flex-1 overflow-y-auto">
         <ParcelSummary />
+        <EgidFilterBar />
         <BuildingsModule />
         <MeasurementsModule />
         <EnergyModule />

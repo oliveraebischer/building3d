@@ -133,6 +133,10 @@ type MapState = {
   setAnalysisSelectedEgid: (id: number | null) => void
   analysisHoveredEgid: number | null
   setAnalysisHoveredEgid: (id: number | null) => void
+  // Per-building filter in analyse mode
+  activeEgids: Set<number>
+  setActiveEgids: (ids: Set<number>) => void
+  toggleActiveEgid: (id: number) => void
   // Measurements computed from 3D geometry
   buildingMeasurements: Record<number, BuildingMeasurements> | null
   setBuildingMeasurements: (m: Record<number, BuildingMeasurements>) => void
@@ -206,10 +210,13 @@ export const useMapStore = create<MapState>((set, get) => ({
   setLookupParcel: (fn) => set({ lookupParcel: fn }),
   setParcelLoading: (v) => set({ parcelLoading: v, parcelError: false }),
   setParcelResult: (parcel, gwr, error = false) =>
-    set({ selectedParcel: parcel, selectedGWR: gwr, parcelLoading: false, parcelError: error }),
+    set({
+      selectedParcel: parcel, selectedGWR: gwr, parcelLoading: false, parcelError: error,
+      activeEgids: new Set(gwr.map(b => Number(b.egid)).filter(id => id > 0)),
+    }),
   clearParcel: () => {
     get().setHighlightBuilding?.(null)
-    set({ selectedParcel: null, selectedGWR: [], parcelLoading: false, parcelError: false })
+    set({ selectedParcel: null, selectedGWR: [], parcelLoading: false, parcelError: false, activeEgids: new Set() })
   },
   setClearHighlight: (fn) => set({ clearHighlight: fn }),
   setHighlightBuildingFn: (fn) => set({ setHighlightBuilding: fn }),
@@ -267,6 +274,14 @@ export const useMapStore = create<MapState>((set, get) => ({
   setAnalysisSelectedEgid: (id) => set({ analysisSelectedEgid: id }),
   analysisHoveredEgid: null,
   setAnalysisHoveredEgid: (id) => set({ analysisHoveredEgid: id }),
+  activeEgids: new Set<number>(),
+  setActiveEgids: (ids) => set({ activeEgids: ids }),
+  toggleActiveEgid: (id) => set((s) => {
+    const next = new Set(s.activeEgids)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    return { activeEgids: next }
+  }),
   buildingMeasurements: null,
   setBuildingMeasurements: (m) => set({ buildingMeasurements: m }),
   clearBuildingMeasurements: () => set({ buildingMeasurements: null }),
