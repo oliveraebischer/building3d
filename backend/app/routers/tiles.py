@@ -5,10 +5,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-router = APIRouter(prefix="/api/tiles", tags=["tiles"])
+from app.auth import get_current_user
+
+router = APIRouter(prefix="/api/tiles", tags=["tiles"], dependencies=[Depends(get_current_user)])
 _delete_lock = asyncio.Lock()
 
 DATA_DIR = Path(__file__).parents[2] / "data" / "tiles"

@@ -5,11 +5,13 @@ from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from shapely.geometry import Point
 from shapely.wkt import loads as wkt_loads
 
-router = APIRouter(prefix="/api/ingest", tags=["ingest"])
+from app.auth import get_current_user
+
+router = APIRouter(prefix="/api/ingest", tags=["ingest"], dependencies=[Depends(get_current_user)])
 MAX_FEATURES = 10_000
 
 

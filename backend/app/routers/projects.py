@@ -1,27 +1,28 @@
 import json
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+
+from app.auth import get_current_user, user_dir
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
-DATA_DIR = Path(__file__).parents[2] / "data"
-PROJECTS_FILE = DATA_DIR / "projects.json"
+
+def _projects_file(user_id: str):
+    return user_dir(user_id) / "projects.json"
 
 
-def _load() -> dict:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    if not PROJECTS_FILE.exists():
+def _load(user_id: str) -> dict:
+    f = _projects_file(user_id)
+    if not f.exists():
         return {}
-    return json.loads(PROJECTS_FILE.read_text())
+    return json.loads(f.read_text())
 
 
-def _save(d: dict) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    PROJECTS_FILE.write_text(json.dumps(d, indent=2))
+def _save(user_id: str, d: dict) -> None:
+    _projects_file(user_id).write_text(json.dumps(d, indent=2))
 
 
 class ProjectPatch(BaseModel):
@@ -35,26 +36,26 @@ class ProjectPatch(BaseModel):
 
 
 @router.get("")
-async def list_projects():
-    d = _load()
+async def list_projects(user: dict = Depends(get_current_user)):
+    d = _load(user["id"])
     return list(d.values())
 
 
 @router.post("", status_code=201)
-async def add_project(request: Request):
+async def add_project(request: Request, user: dict = Depends(get_current_user)):
     project = await request.json()
     project_id = project.get("id")
     if not project_id or not project.get("name"):
         raise HTTPException(400, "project.id and project.name are required")
-    d = _load()
+    d = _load(user["id"])
     d[project_id] = project
-    _save(d)
+    _save(user["id"], d)
     return project
 
 
 @router.patch("/{project_id}")
-async def update_project(project_id: str, patch: ProjectPatch):
-    d = _load()
+async def update_project(project_id: str, patch: ProjectPatch, user: dict = Depends(get_current_user)):
+    d = _load(user["id"])
     if project_id not in d:
         raise HTTPException(404, f"Project {project_id} not found")
     project = d[project_id]
@@ -63,12 +64,12 @@ async def update_project(project_id: str, patch: ProjectPatch):
         if value is not None:
             project[field] = value
     project["updatedAt"] = datetime.now(timezone.utc).isoformat()
-    _save(d)
+    _save(user["id"], d)
     return project
 
 
 @router.delete("/{project_id}", status_code=204)
-async def delete_project(project_id: str):
-    d = _load()
+async def delete_project(project_id: str, user: dict = Depends(get_current_user)):
+    d = _load(user["id"])
     d.pop(project_id, None)
-    _save(d)
+    _save(user["id"], d)

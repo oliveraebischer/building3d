@@ -1,9 +1,11 @@
 import { useRef, useState, useCallback, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import SearchBar, { type SearchBarHandle, type SearchSelectEntry } from './SearchBar'
 import SettingsPanel from './SettingsPanel'
 import PortfolioPanel from './PortfolioPanel'
 import ProjectsPanel from './ProjectsPanel'
 import { useMapStore } from '../store/mapStore'
+import { useAuthStore } from '../store/authStore'
 import type { ParcelFeature, GwrFeature } from '../api/geoAdmin'
 import type maplibregl from 'maplibre-gl'
 import { COLLAPSED_W, EXPANDED_W, DATA_W, SEPARATOR_W } from '../constants'
@@ -82,6 +84,17 @@ function HardHatIcon() {
   )
 }
 
+function LogoutIcon() {
+  return (
+    <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2}
+      strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+      <polyline points="16 17 21 12 16 7" />
+      <line x1="21" y1="12" x2="9" y2="12" />
+    </svg>
+  )
+}
+
 function computeBounds(polys: GeoJSON.Polygon[]): [number, number, number, number] {
   const coords = polys.flatMap(p => p.coordinates.flat() as [number, number][])
   return [
@@ -122,6 +135,12 @@ export default function Sidebar() {
     projectMarkerClickedId, setProjectMarkerClickedId,
     promoteToProjectEgrids,
   } = useMapStore()
+
+  const navigate = useNavigate()
+  const logout = useAuthStore((s) => s.logout)
+  const handleLogout = useCallback(() => {
+    logout().then(() => navigate('/'))
+  }, [logout, navigate])
 
   const searchBarRef = useRef<SearchBarHandle>(null)
   const isDragging = useRef(false)
@@ -478,6 +497,14 @@ export default function Sidebar() {
             >
               <GearIcon />
             </button>
+
+            <button
+              onClick={handleLogout}
+              className="w-9 h-9 flex items-center justify-center rounded-lg text-white/35 hover:text-white hover:bg-white/[0.06] transition-colors"
+              aria-label="Log out"
+            >
+              <LogoutIcon />
+            </button>
           </div>
         ) : (
           // ── Expanded ──────────────────────────────────────────────────────
@@ -581,7 +608,7 @@ export default function Sidebar() {
             </div>
 
             {/* Settings button */}
-            <div className="shrink-0 border-t border-white/[0.07] px-3 pt-1.5 pb-3">
+            <div className="shrink-0 border-t border-white/[0.07] px-3 pt-1.5 pb-1.5">
               <button
                 onClick={handleSettingsClick}
                 className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold tracking-wide transition-colors ${
@@ -597,6 +624,18 @@ export default function Sidebar() {
 
             {/* Settings panel — below Settings button */}
             {settingsMode && <SettingsPanel />}
+
+            {/* Logout button */}
+            <div className="shrink-0 border-t border-white/[0.07] px-3 pt-1.5 pb-3">
+              <button
+                onClick={handleLogout}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold tracking-wide
+                           text-white/35 hover:text-white/70 transition-colors"
+              >
+                <LogoutIcon />
+                Log out
+              </button>
+            </div>
           </div>
         )}
       </div>
