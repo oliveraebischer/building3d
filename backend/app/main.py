@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import tiles, buildings, terrain, portfolio, ingest
+from app.routers import tiles, buildings, terrain, portfolio, projects, ingest
 
 app = FastAPI(
     title="Building3D API",
@@ -21,6 +21,7 @@ app.include_router(tiles.router)
 app.include_router(buildings.router)
 app.include_router(terrain.router)
 app.include_router(portfolio.router)
+app.include_router(projects.router)
 app.include_router(ingest.router)
 
 

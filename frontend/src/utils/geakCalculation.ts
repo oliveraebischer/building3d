@@ -155,7 +155,7 @@ const E_EL_SPECIFIC: Record<GEAKUsage, number> = {
 }
 
 // A_E / gross-floor-area benchmark factors by usage (SIA 380/1 practice)
-const AE_FACTOR: Record<GEAKUsage, number> = {
+export const AE_FACTOR: Record<GEAKUsage, number> = {
   EFH:     0.80,
   MFH:     0.76,
   Büro:    0.72,

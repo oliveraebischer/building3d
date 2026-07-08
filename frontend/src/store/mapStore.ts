@@ -6,6 +6,7 @@ import type { TileGridFeature } from '../api/tiles'
 import type { BuildingMeasurements } from '../utils/buildingMeasurements'
 import type { BuildingFeatureCollection } from '../api/buildings'
 import type { TerrainGrid } from '../api/terrain'
+import type { Project } from '../types/project'
 
 export type PortfolioStatus = 'watch' | 'due-diligence' | 'active' | 'on-hold' | 'divested'
 
@@ -153,6 +154,24 @@ type MapState = {
   // Eagerly prefetched 3D geometry (loaded as soon as tile is ready, before Analyse is clicked)
   prefetchedGeometry: { egrid: string; data: BuildingFeatureCollection; terrain: TerrainGrid | null } | null
   setPrefetchedGeometry: (g: { egrid: string; data: BuildingFeatureCollection; terrain: TerrainGrid | null } | null) => void
+  // Projects
+  projects: Project[]
+  setProjects: (projects: Project[]) => void
+  addProject: (project: Project) => void
+  removeProject: (id: string) => void
+  updateProject: (id: string, patch: Partial<Pick<Project, 'name' | 'projectType' | 'phase' | 'notes' | 'milestones' | 'members' | 'scenarios'>>) => void
+  projectsMapFn: ((projects: Project[]) => void) | null
+  setProjectsMapFn: (fn: ((projects: Project[]) => void) | null) => void
+  projectMarkerClickedId: string | null
+  setProjectMarkerClickedId: (id: string | null) => void
+  activeProjectId: string | null
+  setActiveProjectId: (id: string | null) => void
+  // PortfolioPanel → ProjectsPanel promotion signal
+  promoteToProjectEgrids: string[] | null
+  setPromoteToProjectEgrids: (egrids: string[] | null) => void
+  // Scenario preview shown in the 3D viewer
+  scenarioPreview: { projectId: string; scenarioId: string } | null
+  setScenarioPreview: (p: { projectId: string; scenarioId: string } | null) => void
 }
 
 export const useMapStore = create<MapState>((set, get) => ({
@@ -299,4 +318,40 @@ export const useMapStore = create<MapState>((set, get) => ({
   setSunHourOfDay: (h) => set({ sunHourOfDay: h }),
   prefetchedGeometry: null,
   setPrefetchedGeometry: (g) => set({ prefetchedGeometry: g }),
+  projects: [],
+  setProjects: (projects) => set({ projects }),
+  addProject: (project) => set((s) => {
+    const next = [project, ...s.projects.filter(p => p.id !== project.id)]
+    fetch('/api/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(project),
+    }).catch(() => {})
+    return { projects: next }
+  }),
+  removeProject: (id) => set((s) => {
+    const next = s.projects.filter(p => p.id !== id)
+    fetch(`/api/projects/${id}`, { method: 'DELETE' }).catch(() => {})
+    return { projects: next }
+  }),
+  updateProject: (id, patch) => set((s) => {
+    const updatedAt = new Date().toISOString()
+    const next = s.projects.map(p => p.id === id ? { ...p, ...patch, updatedAt } : p)
+    fetch(`/api/projects/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    }).catch(() => {})
+    return { projects: next }
+  }),
+  projectsMapFn: null,
+  setProjectsMapFn: (fn) => set({ projectsMapFn: fn }),
+  projectMarkerClickedId: null,
+  setProjectMarkerClickedId: (id) => set({ projectMarkerClickedId: id }),
+  activeProjectId: null,
+  setActiveProjectId: (id) => set({ activeProjectId: id }),
+  promoteToProjectEgrids: null,
+  setPromoteToProjectEgrids: (egrids) => set({ promoteToProjectEgrids: egrids }),
+  scenarioPreview: null,
+  setScenarioPreview: (p) => set({ scenarioPreview: p }),
 }))

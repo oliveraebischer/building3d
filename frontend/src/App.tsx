@@ -11,7 +11,7 @@ import { useAutoTileDownload } from './hooks/useAutoTileDownload'
 import { usePreloadBuildings } from './hooks/usePreloadBuildings'
 
 export default function App() {
-  const { analysisMode, helpMode, setDownloadedTileIds, setPortfolio } = useMapStore()
+  const { analysisMode, helpMode, setDownloadedTileIds, setPortfolio, setProjects } = useMapStore()
   const autoTileStatus = useAutoTileDownload()
   usePreloadBuildings(autoTileStatus)
 
@@ -47,6 +47,13 @@ export default function App() {
         // Backend unavailable — fall back to localStorage
         setPortfolio(loadPortfolioFromStorage())
       })
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    fetch('/api/projects')
+      .then((r) => r.json())
+      .then(setProjects)
+      .catch(() => {})
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div className="relative w-full h-full">

@@ -2,6 +2,8 @@ import { useEffect, useRef } from 'react'
 import maplibregl from 'maplibre-gl'
 import { useMapStore, BASE_LAYERS } from '../store/mapStore'
 import type { PortfolioEntry } from '../store/mapStore'
+import type { Project } from '../types/project'
+import { PHASE_CONFIG, TYPE_LABELS } from './ProjectsPanel'
 import { identifyParcel, findBuildingsByEGRID } from '../api/geoAdmin'
 
 const SWITZERLAND_CENTER: [number, number] = [8.2275, 46.8182]
@@ -25,6 +27,7 @@ export default function MapView() {
           setParcelLoading, setParcelResult, clearParcel,
           highlightedTileId } = useMapStore()
   const portfolio = useMapStore(s => s.portfolio)
+  const projects = useMapStore(s => s.projects)
   const portfolioHoveredBuildingEgid = useMapStore(s => s.portfolioHoveredBuildingEgid)
   const ingestedLayer = useMapStore(s => s.ingestedLayer)
   const prevHoveredBuildingRef = useRef<string | null>(null)
@@ -424,6 +427,157 @@ export default function MapView() {
       // Stored for cleanup
       ;(map as unknown as Record<string, unknown>)._portfolioPopupStyle = portfolioPopupStyle
 
+      // ── Projects: diamond markers (zoomed out) + dashed construction perimeters (zoomed in) ──
+      const makeDiamondIcon = (hex: string): ImageData => {
+        const size = 28
+        const canvas = document.createElement('canvas')
+        canvas.width = size
+        canvas.height = size
+        const ctx = canvas.getContext('2d')!
+        ctx.translate(size / 2, size / 2)
+        ctx.rotate(Math.PI / 4)
+        const half = (size / 2 - 2.5) / Math.SQRT2
+        ctx.fillStyle = hex
+        ctx.strokeStyle = '#ffffff'
+        ctx.lineWidth = 2
+        ctx.beginPath()
+        ctx.rect(-half, -half, half * 2, half * 2)
+        ctx.fill()
+        ctx.stroke()
+        return ctx.getImageData(0, 0, size, size)
+      }
+      for (const [phase, cfg] of Object.entries(PHASE_CONFIG)) {
+        const imgId = `project-marker-${phase}`
+        if (!map.hasImage(imgId)) map.addImage(imgId, makeDiamondIcon(cfg.hex))
+      }
+
+      const phaseColorExpr = [
+        'match', ['get', 'phase'],
+        ...Object.entries(PHASE_CONFIG).flatMap(([p, c]) => [p, c.hex]),
+        '#C0C0C0',
+      ]
+
+      map.addSource('project-areas', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      })
+      map.addSource('project-markers', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      })
+
+      map.addLayer({
+        id: 'project-areas-fill',
+        type: 'fill',
+        source: 'project-areas',
+        minzoom: 14,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        paint: { 'fill-color': phaseColorExpr as any, 'fill-opacity': 0.10 },
+      }, 'parcel-highlight-fill')
+
+      map.addLayer({
+        id: 'project-areas-outline',
+        type: 'line',
+        source: 'project-areas',
+        minzoom: 14,
+        paint: {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          'line-color': phaseColorExpr as any,
+          'line-width': 2,
+          'line-opacity': 0.85,
+          'line-dasharray': [2, 1.5],
+        },
+      }, 'parcel-highlight-fill')
+
+      map.addLayer({
+        id: 'project-markers-symbol',
+        type: 'symbol',
+        source: 'project-markers',
+        maxzoom: 14,
+        layout: {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          'icon-image': ['concat', 'project-marker-', ['get', 'phase']] as any,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          'icon-size': ['interpolate', ['linear'], ['zoom'], 8, 0.7, 14, 1] as any,
+          'icon-allow-overlap': true,
+        },
+      }, 'building-highlight-circle')
+
+      const updateProjectLayers = (projectList: Project[]) => {
+        try {
+          const markersSource = map.getSource('project-markers') as maplibregl.GeoJSONSource | undefined
+          const areasSource = map.getSource('project-areas') as maplibregl.GeoJSONSource | undefined
+          if (!markersSource || !areasSource) return
+          const withMembers = projectList.filter(p => p.members.length > 0)
+          markersSource.setData({
+            type: 'FeatureCollection',
+            features: withMembers.map(p => {
+              const centroids = p.members.map(m => portfolioCentroid(m.parcel.geometry))
+              const center: [number, number] = [
+                centroids.reduce((s, c) => s + c[0], 0) / centroids.length,
+                centroids.reduce((s, c) => s + c[1], 0) / centroids.length,
+              ]
+              return {
+                type: 'Feature' as const,
+                geometry: { type: 'Point' as const, coordinates: center },
+                properties: {
+                  id: p.id, name: p.name, phase: p.phase,
+                  projectType: p.projectType, memberCount: p.members.length,
+                },
+              }
+            }),
+          })
+          areasSource.setData({
+            type: 'FeatureCollection',
+            features: withMembers.flatMap(p => p.members.map(m => ({
+              type: 'Feature' as const,
+              geometry: m.parcel.geometry,
+              properties: {
+                id: p.id, name: p.name, phase: p.phase,
+                projectType: p.projectType, memberCount: p.members.length,
+              },
+            }))),
+          })
+        } catch { /* map may be destroyed during HMR */ }
+      }
+
+      const projectTooltipHtml = (props: Record<string, unknown>) => {
+        const phaseLabel = PHASE_CONFIG[props.phase as keyof typeof PHASE_CONFIG]?.label ?? props.phase
+        const typeLabel = TYPE_LABELS[props.projectType as keyof typeof TYPE_LABELS] ?? props.projectType
+        const n = props.memberCount as number
+        return `<div style="font-weight:600;margin-bottom:3px">${props.name}</div>`
+          + `<div style="color:rgba(255,255,255,0.4);font-size:9px;letter-spacing:0.06em;text-transform:uppercase">`
+          + `${phaseLabel} · ${typeLabel} · ${n} parcel${n !== 1 ? 's' : ''}</div>`
+      }
+
+      for (const layerId of ['project-markers-symbol', 'project-areas-fill'] as const) {
+        map.on('mouseenter', layerId, (e) => {
+          map.getCanvas().style.cursor = 'pointer'
+          const feat = e.features?.[0]
+          if (!feat) return
+          const lngLat = feat.geometry.type === 'Point'
+            ? (feat.geometry as GeoJSON.Point).coordinates as [number, number]
+            : [e.lngLat.lng, e.lngLat.lat] as [number, number]
+          portfolioTooltip
+            .setLngLat(lngLat)
+            .setHTML(projectTooltipHtml(feat.properties as Record<string, unknown>))
+            .addTo(map)
+        })
+        map.on('mouseleave', layerId, () => {
+          map.getCanvas().style.cursor = ''
+          portfolioTooltip.remove()
+        })
+        map.on('click', layerId, (e) => {
+          const id = e.features?.[0]?.properties?.id as string | undefined
+          if (!id) return
+          portfolioTooltip.remove()
+          useMapStore.getState().setProjectMarkerClickedId(id)
+        })
+      }
+
+      useMapStore.getState().setProjectsMapFn(updateProjectLayers)
+      updateProjectLayers(useMapStore.getState().projects)
+
       // Tile grid interaction
       let hoveredTileId: string | null = null
 
@@ -502,6 +656,9 @@ export default function MapView() {
     map.on('click', (e) => {
       if (useMapStore.getState().dataMode) return
       if (map.getZoom() < CADASTRAL_MIN_ZOOM) return
+      // Clicks on a project area open the project instead of a parcel lookup
+      if (map.getLayer('project-areas-fill')
+        && map.queryRenderedFeatures(e.point, { layers: ['project-areas-fill'] }).length > 0) return
       doLookup(e.lngLat.lng, e.lngLat.lat, false)
     })
 
@@ -542,11 +699,13 @@ export default function MapView() {
     return () => {
       clearParcel()
       useMapStore.getState().setPortfolioPinsFn(null)
+      useMapStore.getState().setProjectsMapFn(null)
       ;((map as unknown as Record<string, unknown>)._portfolioPopupStyle as HTMLStyleElement | undefined)?.remove()
-      for (const id of ['portfolio-building-pins-circle', 'portfolio-pins-circle', 'portfolio-parcels-fill', 'portfolio-parcels-outline']) {
+      for (const id of ['portfolio-building-pins-circle', 'portfolio-pins-circle', 'portfolio-parcels-fill', 'portfolio-parcels-outline',
+                        'project-markers-symbol', 'project-areas-fill', 'project-areas-outline']) {
         if (map.getLayer(id)) map.removeLayer(id)
       }
-      for (const id of ['portfolio-building-pins', 'portfolio-pins', 'portfolio-parcels']) {
+      for (const id of ['portfolio-building-pins', 'portfolio-pins', 'portfolio-parcels', 'project-markers', 'project-areas']) {
         if (map.getSource(id)) map.removeSource(id)
       }
       for (const id of ['ingest-fill', 'ingest-outline', 'ingest-circle']) {
@@ -704,6 +863,11 @@ export default function MapView() {
   useEffect(() => {
     useMapStore.getState().portfolioPinsFn?.(portfolio)
   }, [portfolio])
+
+  // Keep project markers + areas in sync whenever projects change
+  useEffect(() => {
+    useMapStore.getState().projectsMapFn?.(projects)
+  }, [projects])
 
   // Sync portfolio building hover → map feature state
   useEffect(() => {

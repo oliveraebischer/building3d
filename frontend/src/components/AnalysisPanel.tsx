@@ -7,7 +7,7 @@ import type { AutoTileStatus } from '../hooks/useAutoTileDownload'
 
 export default function AnalysisPanel({ autoTileStatus }: { autoTileStatus: AutoTileStatus }) {
   const { sidebarCollapsed, sidebarWidth, sidebarResizing,
-          setAnalysisMode } = useMapStore()
+          setAnalysisMode, setScenarioPreview } = useMapStore()
 
   const [leftPct, setLeftPct] = useState(33.33)
   const isDragging = useRef(false)
@@ -72,7 +72,7 @@ export default function AnalysisPanel({ autoTileStatus }: { autoTileStatus: Auto
       <div className="flex-1 h-full bg-[#080808] flex flex-col overflow-hidden">
         <div className="flex items-center justify-end px-4 py-3 border-b border-white/[0.06] shrink-0">
           <button
-            onClick={() => setAnalysisMode(false)}
+            onClick={() => { setScenarioPreview(null); setAnalysisMode(false) }}
             className="flex items-center gap-1.5 text-[11px] text-white/35 hover:text-white transition-colors"
             aria-label="Close analysis"
           >

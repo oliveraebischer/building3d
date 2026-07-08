@@ -5,7 +5,8 @@ import { useMapStore } from '../store/mapStore'
 import { fetchBuildings, fetchNeighborBuildings, type BuildingFeature, type BuildingFeatureCollection } from '../api/buildings'
 import { fetchTerrain, type TerrainGrid } from '../api/terrain'
 import { findBuildingByEGID } from '../api/geoAdmin'
-import { computeMeasurements } from '../utils/buildingMeasurements'
+import { computeMeasurements, findFloorRing } from '../utils/buildingMeasurements'
+import { memberIncludedBuildings } from '../types/project'
 import { computeSunPosition } from '../utils/solarPosition'
 import { loadImage, computeMapUrls, computeMapUrlsFromBbox, getPreloadedMapImages } from '../utils/mapTexture'
 import { pointInRing } from '../utils/tileUtils'
@@ -77,6 +78,7 @@ export default function BuildingViewer3D({ autoTileStatus }: { autoTileStatus: A
     sunDayOfYear, sunHourOfDay,
     portfolioSnapshotGeometries, setPortfolioSnapshotGeometries,
     prefetchedGeometry,
+    scenarioPreview, projects,
   } = useMapStore()
   const [state, setState] = useState<ViewerState>({ status: 'idle' })
   const canvasRef = useRef<HTMLDivElement>(null)
@@ -111,6 +113,7 @@ export default function BuildingViewer3D({ autoTileStatus }: { autoTileStatus: A
   const [neighborLoading, setNeighborLoading] = useState(false)
   const neighborGroupRef = useRef<THREE.Group | null>(null)
   const neighborMatRef   = useRef<THREE.MeshPhongMaterial | null>(null)
+  const scenarioGroupRef = useRef<THREE.Group | null>(null)
 
   // Refs for panel ↔ 3D viewer building highlight
   const dirLightRef             = useRef<THREE.DirectionalLight | null>(null)
@@ -338,6 +341,11 @@ export default function BuildingViewer3D({ autoTileStatus }: { autoTileStatus: A
     neighborGroup.visible = showNeighbors
     scene.add(neighborGroup)
     neighborGroupRef.current = neighborGroup
+
+    // Scenario preview group (translucent extrusions, populated by a separate effect)
+    const scenarioGroup = new THREE.Group()
+    scene.add(scenarioGroup)
+    scenarioGroupRef.current = scenarioGroup
 
     const neighborMat = new THREE.MeshPhongMaterial({
       color: 0x607880,
@@ -733,6 +741,12 @@ export default function BuildingViewer3D({ autoTileStatus }: { autoTileStatus: A
       neighborHighlightMat.dispose()
       neighborGroupRef.current = null
       neighborMatRef.current = null
+      for (const child of scenarioGroup.children)
+        if (child instanceof THREE.Mesh) {
+          child.geometry.dispose()
+          ;(child.material as THREE.Material).dispose()
+        }
+      scenarioGroupRef.current = null
     }
   }, [state]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -799,6 +813,72 @@ export default function BuildingViewer3D({ autoTileStatus }: { autoTileStatus: A
   useEffect(() => {
     if (neighborGroupRef.current) neighborGroupRef.current.visible = showNeighbors
   }, [showNeighbors])
+
+  // Scenario preview — translucent extrusions on top of target buildings
+  useEffect(() => {
+    const sg = scenarioGroupRef.current
+    if (!sg || state.status !== 'ready') return
+
+    for (const child of [...sg.children])
+      if (child instanceof THREE.Mesh) {
+        child.geometry.dispose()
+        ;(child.material as THREE.Material).dispose()
+      }
+    sg.clear()
+
+    if (!scenarioPreview) return
+    const project = projects.find(p => p.id === scenarioPreview.projectId)
+    const scenario = project?.scenarios.find(s => s.id === scenarioPreview.scenarioId)
+    if (!project || !scenario || scenario.params.extraFloors <= 0) return
+    const center = sceneCenterRef.current
+    if (!center) return
+
+    // Same local transform as the scene build (recomputed like the neighbour effect)
+    const allZs: number[] = []
+    for (const f of state.data.features)
+      for (const poly of f.geometry.coordinates)
+        for (const ring of poly)
+          for (const [,, z] of ring) allZs.push(z)
+    const buildingMinZ = Math.min(...allZs)
+    const minZ = state.terrain ? Math.min(buildingMinZ, state.terrain.min_elevation) : buildingMinZ
+    const cosLat = Math.cos(center.lat * Math.PI / 180)
+    const toLocal = (lng: number, lat: number, z: number): [number, number, number] => [
+      (lng - center.lon) * cosLat * 111320, z - minZ, -(lat - center.lat) * 111320,
+    ]
+
+    const includedEgids = project.members.flatMap(memberIncludedBuildings).map(b => b.egid)
+    const targets = new Set((scenario.params.targetEgids ?? includedEgids).map(Number))
+    const depth = scenario.params.extraFloors * 2.8
+
+    const mat = new THREE.MeshPhongMaterial({
+      color: 0x34D399,
+      transparent: true,
+      opacity: 0.35,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      flatShading: true,
+    })
+
+    for (const feat of state.data.features) {
+      const egid = feat.properties.egid
+      if (egid == null || !targets.has(Number(egid))) continue
+      const baseMesh = meshByEgidRef.current.get(Number(egid))
+      if (!baseMesh) continue
+      const ring = findFloorRing(feat)
+      if (!ring || ring.length < 4) continue
+      const nPts = ring.length - 1
+      const pts = ring.slice(0, nPts).map(([lng, lat, z]) => toLocal(lng, lat, z))
+      // Shape lies in XY, extruded along +Z; rotating -90° about X maps (sx, sy, d) → (sx, d, -sy),
+      // so shape y must be the negated world z for the footprint to land on the XZ plane.
+      const shape = new THREE.Shape(pts.map(([x, , z]) => new THREE.Vector2(x, -z)))
+      const geo = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false })
+      const extMesh = new THREE.Mesh(geo, mat)
+      extMesh.rotation.x = -Math.PI / 2
+      extMesh.position.y = new THREE.Box3().setFromObject(baseMesh).max.y
+      sg.add(extMesh)
+    }
+    if (rendererRef.current) rendererRef.current.shadowMap.needsUpdate = true
+  }, [scenarioPreview, projects, state])
 
   // Toggle aerial+cadastral texture without rebuilding the scene
   useEffect(() => {
