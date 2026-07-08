@@ -1,5 +1,7 @@
-# Generated for `fly launch` / `fly deploy` — adjust app name/region as needed.
-app = "building3d-backend"
+# Generated for `fly launch` / `fly deploy` — the Fly "Deploy from GitHub repo"
+# flow overrides `app` with its own generated name via --force-name; rename
+# freely if deploying manually.
+app = "building3d"
 primary_region = "fra"
 
 [build]
