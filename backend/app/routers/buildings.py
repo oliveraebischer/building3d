@@ -5,10 +5,12 @@ from pathlib import Path
 from typing import Optional
 
 import fiona
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pyproj import Transformer
 
-router = APIRouter(prefix="/api/buildings", tags=["buildings"])
+from app.auth import get_current_user
+
+router = APIRouter(prefix="/api/buildings", tags=["buildings"], dependencies=[Depends(get_current_user)])
 DATA_DIR = Path(__file__).parents[2] / "data" / "tiles"
 _executor = ThreadPoolExecutor(max_workers=2)
 

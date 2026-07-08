@@ -2,10 +2,12 @@ import asyncio
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pyproj import Transformer
 
-router = APIRouter(prefix="/api/terrain", tags=["terrain"])
+from app.auth import get_current_user
+
+router = APIRouter(prefix="/api/terrain", tags=["terrain"], dependencies=[Depends(get_current_user)])
 HEIGHT_URL = "https://api3.geo.admin.ch/rest/services/height"
 
 
