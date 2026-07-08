@@ -35,5 +35,5 @@ RUN pip install --no-cache-dir $(grep -vi '^gdal' requirements.txt | tr '\n' ' '
 COPY backend/ .
 COPY --from=frontend-build /frontend/dist ./static
 
-EXPOSE 8000
+EXPOSE 8080
 CMD ["python", "run.py"]
