@@ -41,7 +41,10 @@ function EntryCard({ entry, onRemove }: { entry: PortfolioEntry; onRemove: () =>
     updatePortfolioEntry,
     portfolioPinClickedEgrid, setPortfolioPinClickedEgrid,
     portfolioHoveredBuildingEgid, setPortfolioHoveredBuildingEgid,
+    projects, setPromoteToProjectEgrids,
   } = useMapStore()
+
+  const inProject = projects.some(p => p.members.some(m => m.sourcePortfolioEgrid === entry.parcel.egrid))
 
   const status = entry.status ?? 'watch'
   const cfg = STATUS_CONFIG[status]
@@ -159,6 +162,14 @@ function EntryCard({ entry, onRemove }: { entry: PortfolioEntry; onRemove: () =>
                   title="Snapshot cached"
                 />
               )}
+              {inProject && (
+                <span
+                  className="text-[8px] px-1 py-px rounded bg-white/[0.06] text-white/30 shrink-0 uppercase tracking-wider"
+                  title="Part of a project"
+                >
+                  Project
+                </span>
+              )}
             </div>
           </div>
           <svg
@@ -177,6 +188,13 @@ function EntryCard({ entry, onRemove }: { entry: PortfolioEntry; onRemove: () =>
             title="Open analysis"
           >
             Analyse
+          </button>
+          <button
+            onClick={e => { e.stopPropagation(); setPromoteToProjectEgrids([entry.parcel.egrid]) }}
+            className="px-1.5 py-1 text-[9px] font-semibold text-white/30 hover:text-white/70 transition-colors rounded hover:bg-white/10 whitespace-nowrap"
+            title="Promote to a new project"
+          >
+            → Project
           </button>
           <button
             onClick={e => { e.stopPropagation(); flyTo() }}

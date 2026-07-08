@@ -2,8 +2,8 @@ import { useRef, useState, useCallback, useEffect } from 'react'
 import SearchBar, { type SearchBarHandle, type SearchSelectEntry } from './SearchBar'
 import SettingsPanel from './SettingsPanel'
 import PortfolioPanel from './PortfolioPanel'
+import ProjectsPanel from './ProjectsPanel'
 import { useMapStore } from '../store/mapStore'
-import type { PortfolioEntry } from '../store/mapStore'
 import type { ParcelFeature, GwrFeature } from '../api/geoAdmin'
 import type maplibregl from 'maplibre-gl'
 import { COLLAPSED_W, EXPANDED_W, DATA_W, SEPARATOR_W } from '../constants'
@@ -70,8 +70,20 @@ function BriefcaseIcon() {
   )
 }
 
-function computeBounds(entries: PortfolioEntry[]): [number, number, number, number] {
-  const coords = entries.flatMap(e => e.parcel.geometry.coordinates.flat() as [number, number][])
+function HardHatIcon() {
+  return (
+    <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2}
+      strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+      <path d="M2 18a1 1 0 0 0 1 1h18a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v2z" />
+      <path d="M10 10V5a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v5" />
+      <path d="M4 15v-3a6 6 0 0 1 6-6" />
+      <path d="M14 6a6 6 0 0 1 6 6v3" />
+    </svg>
+  )
+}
+
+function computeBounds(polys: GeoJSON.Polygon[]): [number, number, number, number] {
+  const coords = polys.flatMap(p => p.coordinates.flat() as [number, number][])
   return [
     Math.min(...coords.map(c => c[0])),
     Math.min(...coords.map(c => c[1])),
@@ -106,6 +118,9 @@ export default function Sidebar() {
     portfolioPinClickedEgrid,
     helpMode, setHelpMode,
     helpPanelWidth,
+    projects, setActiveProjectId,
+    projectMarkerClickedId, setProjectMarkerClickedId,
+    promoteToProjectEgrids,
   } = useMapStore()
 
   const searchBarRef = useRef<SearchBarHandle>(null)
@@ -114,6 +129,9 @@ export default function Sidebar() {
   const [portfolioMode, setPortfolioMode] = useState(false)
   const portfolioModeRef = useRef(portfolioMode)
   portfolioModeRef.current = portfolioMode
+  const [projectsMode, setProjectsMode] = useState(false)
+  const projectsModeRef = useRef(projectsMode)
+  projectsModeRef.current = projectsMode
   const [recentSearches, setRecentSearches] = useState<SearchSelectEntry[]>(() => loadRecent())
 
   const handleSearchSelect = useCallback((entry: SearchSelectEntry) => {
@@ -179,7 +197,8 @@ export default function Sidebar() {
       })
     } else {
       if (portfolioMode) { clearHighlight?.(); setPortfolioMode(false) }
-      if (!portfolioMode) prevSidebarWidthRef.current = sidebarWidth
+      if (projectsMode) { clearHighlight?.(); setProjectsMode(false) }
+      if (!portfolioMode && !projectsMode) prevSidebarWidthRef.current = sidebarWidth
 
       prevLayerRef.current = activeBaseLayerId
       prevCenterRef.current = mapInstance?.getCenter() ?? null
@@ -218,7 +237,8 @@ export default function Sidebar() {
       mapInstance?.easeTo({ padding: { ...PAD_NONE, left: widthToRestore + SEPARATOR_W }, duration: 500 })
     } else {
       if (settingsMode) handleSettingsClick()
-      if (!settingsMode) prevSidebarWidthRef.current = sidebarWidth
+      if (projectsMode) { clearHighlight?.(); setProjectsMode(false) }
+      if (!settingsMode && !projectsMode) prevSidebarWidthRef.current = sidebarWidth
       setSidebarCollapsed(false)
       setSidebarWidth(DATA_W)
       setPortfolioMode(true)
@@ -226,7 +246,32 @@ export default function Sidebar() {
       mapInstance?.easeTo({ padding: { ...PAD_NONE, left: DATA_W + SEPARATOR_W }, duration: 300 })
       if (portfolio.length > 0 && portfolioHighlightFn) {
         portfolioHighlightFn(portfolio.map(e => e.parcel.geometry))
-        mapInstance?.fitBounds(computeBounds(portfolio), { padding: 80, duration: 1000 })
+        mapInstance?.fitBounds(computeBounds(portfolio.map(e => e.parcel.geometry)), { padding: 80, duration: 1000 })
+      }
+    }
+  }
+
+  // ── Projects mode toggle ──────────────────────────────────────────────────
+  const handleProjectsClick = () => {
+    if (projectsMode) {
+      clearHighlight?.()
+      const widthToRestore = prevSidebarWidthRef.current
+      setSidebarWidth(widthToRestore)
+      setProjectsMode(false)
+      mapInstance?.easeTo({ padding: { ...PAD_NONE, left: widthToRestore + SEPARATOR_W }, duration: 500 })
+    } else {
+      if (settingsMode) handleSettingsClick()
+      if (portfolioMode) { clearHighlight?.(); setPortfolioMode(false) }
+      if (!settingsMode && !portfolioMode) prevSidebarWidthRef.current = sidebarWidth
+      setSidebarCollapsed(false)
+      setSidebarWidth(DATA_W)
+      setProjectsMode(true)
+      clearParcel()
+      mapInstance?.easeTo({ padding: { ...PAD_NONE, left: DATA_W + SEPARATOR_W }, duration: 300 })
+      const geoms = projects.flatMap(p => p.members.map(m => m.parcel.geometry))
+      if (geoms.length > 0 && portfolioHighlightFn) {
+        portfolioHighlightFn(geoms)
+        mapInstance?.fitBounds(computeBounds(geoms), { padding: 80, duration: 1000 })
       }
     }
   }
@@ -242,12 +287,17 @@ export default function Sidebar() {
     if (helpMode) {
       handleHelpClose()
     } else {
-      const baseW = portfolioMode || settingsMode ? prevSidebarWidthRef.current : sidebarWidth
+      const baseW = portfolioMode || settingsMode || projectsMode ? prevSidebarWidthRef.current : sidebarWidth
 
       if (portfolioMode) {
         clearHighlight?.()
         setSidebarWidth(baseW)
         setPortfolioMode(false)
+      }
+      if (projectsMode) {
+        clearHighlight?.()
+        setSidebarWidth(baseW)
+        setProjectsMode(false)
       }
       if (settingsMode) {
         if (mapInstance) setCadastral(mapInstance, true)
@@ -296,6 +346,20 @@ export default function Sidebar() {
     if (portfolioModeRef.current) return // already open — PortfolioPanel handles scroll
     handlePortfolioClick()
   }, [portfolioPinClickedEgrid]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Open projects mode when a project marker/area is clicked ──────────────
+  useEffect(() => {
+    if (!projectMarkerClickedId) return
+    setActiveProjectId(projectMarkerClickedId)
+    if (!projectsModeRef.current) handleProjectsClick()
+    setProjectMarkerClickedId(null)
+  }, [projectMarkerClickedId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Open projects mode when a portfolio entry is promoted ─────────────────
+  useEffect(() => {
+    if (!promoteToProjectEgrids) return
+    if (!projectsModeRef.current) handleProjectsClick()
+  }, [promoteToProjectEgrids]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Separator drag ────────────────────────────────────────────────────────
   const onSeparatorMouseDown = useCallback(() => {
@@ -377,6 +441,18 @@ export default function Sidebar() {
               aria-label="Portfolio"
             >
               <BriefcaseIcon />
+            </button>
+
+            <button
+              onClick={handleProjectsClick}
+              className={`w-9 h-9 flex items-center justify-center rounded-lg transition-colors ${
+                projectsMode
+                  ? 'bg-white text-[#0d0d0d]'
+                  : 'text-white/35 hover:text-white hover:bg-white/[0.06]'
+              }`}
+              aria-label="Projects"
+            >
+              <HardHatIcon />
             </button>
 
             <button
@@ -470,6 +546,24 @@ export default function Sidebar() {
 
             {/* Portfolio panel — inline below Portfolio button */}
             {portfolioMode && <PortfolioPanel />}
+
+            {/* Projects button */}
+            <div className="shrink-0 border-t border-white/[0.07] px-3 pt-1.5 pb-1.5">
+              <button
+                onClick={handleProjectsClick}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold tracking-wide transition-colors ${
+                  projectsMode
+                    ? 'bg-white text-[#0d0d0d]'
+                    : 'border border-white/[0.08] text-white/50 hover:border-white/20 hover:text-white/80'
+                }`}
+              >
+                <HardHatIcon />
+                Projects
+              </button>
+            </div>
+
+            {/* Projects panel — inline below Projects button */}
+            {projectsMode && <ProjectsPanel />}
 
             {/* Guide button */}
             <div className="shrink-0 border-t border-white/[0.07] px-3 pt-1.5 pb-1.5">

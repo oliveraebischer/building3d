@@ -79,6 +79,21 @@ function clipTriangle(v0: Vec3, v1: Vec3, v2: Vec3, a0: number, a1: number, a2: 
   ]
 }
 
+// Identify the floor polygon: the exterior ring (index 0) of the polygon with the lowest avg Z.
+// Only exterior rings are considered — interior rings (holes) are GeoJSON index 1+ and must be skipped,
+// otherwise a small interior hole at a slightly lower elevation can be selected instead of the full footprint.
+export function findFloorRing(feature: BuildingFeature): [number, number, number][] | null {
+  let floorRing: [number, number, number][] | null = null
+  let minAvgZ = Infinity
+  for (const poly of feature.geometry.coordinates) {
+    const ring = poly[0]  // exterior ring only
+    if (!ring || ring.length < 3) continue
+    const avgZ = ring.reduce((s, v) => s + v[2], 0) / ring.length
+    if (avgZ < minAvgZ) { minAvgZ = avgZ; floorRing = ring }
+  }
+  return floorRing
+}
+
 export function computeMeasurements(
   mesh: THREE.Mesh,
   feature: BuildingFeature,
@@ -131,17 +146,7 @@ export function computeMeasurements(
     }
   }
 
-  // Identify the floor polygon: the exterior ring (index 0) of the polygon with the lowest avg Z.
-  // Only exterior rings are considered — interior rings (holes) are GeoJSON index 1+ and must be skipped,
-  // otherwise a small interior hole at a slightly lower elevation can be selected instead of the full footprint.
-  let floorRing: [number, number, number][] | null = null
-  let minAvgZ = Infinity
-  for (const poly of feature.geometry.coordinates) {
-    const ring = poly[0]  // exterior ring only
-    if (!ring || ring.length < 3) continue
-    const avgZ = ring.reduce((s, v) => s + v[2], 0) / ring.length
-    if (avgZ < minAvgZ) { minAvgZ = avgZ; floorRing = ring }
-  }
+  const floorRing = findFloorRing(feature)
 
   let circumferenceM = 0
   let footprintM2 = 0
