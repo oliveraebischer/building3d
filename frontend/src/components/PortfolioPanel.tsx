@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { useMapStore } from '../store/mapStore'
 import type { PortfolioEntry, PortfolioStatus } from '../store/mapStore'
+import ConfirmDialog from './ui/ConfirmDialog'
 
 type StatusFilter = 'all' | PortfolioStatus
 
@@ -37,12 +38,16 @@ function EntryCard({ entry, onRemove }: { entry: PortfolioEntry; onRemove: () =>
   const {
     mapInstance, portfolioHighlightFn,
     setParcelResult, setPortfolioSnapshotGeometries,
-    setAnalysisMode,
+    analysisMode, setAnalysisMode,
+    projectMode, setProjectMode,
+    selectedParcel,
     updatePortfolioEntry,
     portfolioPinClickedEgrid, setPortfolioPinClickedEgrid,
     portfolioHoveredBuildingEgid, setPortfolioHoveredBuildingEgid,
     projects, setPromoteToProjectEgrids,
   } = useMapStore()
+
+  const [confirmingExit, setConfirmingExit] = useState(false)
 
   const inProject = projects.some(p => p.members.some(m => m.sourcePortfolioEgrid === entry.parcel.egrid))
 
@@ -102,8 +107,25 @@ function EntryCard({ entry, onRemove }: { entry: PortfolioEntry; onRemove: () =>
     portfolioHighlightFn?.([entry.parcel.geometry])
   }
 
+  // Analysis/Project are full-screen overlays that hide the map — flying to a
+  // different parcel underneath would be invisible, so confirm exiting first.
+  const needsExitConfirm = projectMode || (analysisMode && selectedParcel?.egrid !== entry.parcel.egrid)
+
+  const exitAndZoom = () => {
+    setAnalysisMode(false)
+    setProjectMode(false)
+    setOpen(true)
+    flyTo()
+  }
+
   const handleCardClick = () => {
+    if (needsExitConfirm) { setConfirmingExit(true); return }
     setOpen(o => !o)
+    flyTo()
+  }
+
+  const handleFlyToClick = () => {
+    if (needsExitConfirm) { setConfirmingExit(true); return }
     flyTo()
   }
 
@@ -197,7 +219,7 @@ function EntryCard({ entry, onRemove }: { entry: PortfolioEntry; onRemove: () =>
             → Project
           </button>
           <button
-            onClick={e => { e.stopPropagation(); flyTo() }}
+            onClick={e => { e.stopPropagation(); handleFlyToClick() }}
             className="p-1 text-white/20 hover:text-white/60 transition-colors rounded"
             title="Fly to"
           >
@@ -285,6 +307,13 @@ function EntryCard({ entry, onRemove }: { entry: PortfolioEntry; onRemove: () =>
           )}
         </div>
       )}
+      <ConfirmDialog
+        open={confirmingExit}
+        title={projectMode ? 'Exit project?' : 'Exit analysis?'}
+        message={`Close the ${projectMode ? 'project' : 'building analysis'} window and zoom into this object in the portfolio?`}
+        onConfirm={() => { setConfirmingExit(false); exitAndZoom() }}
+        onCancel={() => setConfirmingExit(false)}
+      />
     </div>
   )
 }
