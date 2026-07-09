@@ -30,6 +30,15 @@ app.include_router(projects.router)
 app.include_router(ingest.router)
 
 
+@app.on_event("startup")
+async def _backfill_tile_bboxes():
+    # Tag any tile downloaded before bbox_lv95 existed, so buildings.py's
+    # tile-bbox filtering actually narrows queries for tiles already on disk,
+    # not just future downloads. Cheap (metadata-only extent reads) and a
+    # no-op once every tile is tagged.
+    tiles.backfill_missing_bboxes()
+
+
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "service": "building3d-api"}
