@@ -159,7 +159,7 @@ type MapState = {
   setProjects: (projects: Project[]) => void
   addProject: (project: Project) => void
   removeProject: (id: string) => void
-  updateProject: (id: string, patch: Partial<Pick<Project, 'name' | 'projectType' | 'phase' | 'notes' | 'milestones' | 'members' | 'scenarios'>>) => void
+  updateProject: (id: string, patch: Partial<Pick<Project, 'name' | 'projectType' | 'status' | 'notes' | 'milestones' | 'members' | 'scenarios' | 'activeScenarioId' | 'siaTimeline' | 'energyPlan'>>) => void
   projectsMapFn: ((projects: Project[]) => void) | null
   setProjectsMapFn: (fn: ((projects: Project[]) => void) | null) => void
   projectMarkerClickedId: string | null
@@ -172,6 +172,12 @@ type MapState = {
   // Scenario preview shown in the 3D viewer
   scenarioPreview: { projectId: string; scenarioId: string } | null
   setScenarioPreview: (p: { projectId: string; scenarioId: string } | null) => void
+  // Full-screen project view (mutually exclusive with analysisMode)
+  projectMode: boolean
+  setProjectMode: (v: boolean) => void
+  // Scenario displayed in the project 3D viewer; null = Bestand (no massing)
+  projectScenarioPreviewId: string | null
+  setProjectScenarioPreviewId: (id: string | null) => void
 }
 
 export const useMapStore = create<MapState>((set, get) => ({
@@ -192,7 +198,7 @@ export const useMapStore = create<MapState>((set, get) => ({
   sidebarCollapsed: false,
   setSidebarCollapsed: (v) => set({ sidebarCollapsed: v }),
   analysisMode: false,
-  setAnalysisMode: (v) => set({ analysisMode: v }),
+  setAnalysisMode: (v) => set(v ? { analysisMode: true, projectMode: false } : { analysisMode: false }),
   helpMode: false,
   setHelpMode: (v) => set({ helpMode: v }),
   helpPanelWidth: 380,
@@ -354,4 +360,10 @@ export const useMapStore = create<MapState>((set, get) => ({
   setPromoteToProjectEgrids: (egrids) => set({ promoteToProjectEgrids: egrids }),
   scenarioPreview: null,
   setScenarioPreview: (p) => set({ scenarioPreview: p }),
+  projectMode: false,
+  setProjectMode: (v) => set(v
+    ? { projectMode: true, analysisMode: false }
+    : { projectMode: false, projectScenarioPreviewId: null, buildingMeasurements: null }),
+  projectScenarioPreviewId: null,
+  setProjectScenarioPreviewId: (id) => set({ projectScenarioPreviewId: id }),
 }))

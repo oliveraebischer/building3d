@@ -3,8 +3,11 @@ import maplibregl from 'maplibre-gl'
 import { useMapStore, BASE_LAYERS } from '../store/mapStore'
 import type { PortfolioEntry } from '../store/mapStore'
 import type { Project } from '../types/project'
-import { PHASE_CONFIG, TYPE_LABELS } from './ProjectsPanel'
+import { STATUS_CONFIG, TYPE_LABELS } from './projectConfig'
 import { identifyParcel, findBuildingsByEGRID } from '../api/geoAdmin'
+import { union } from '@turf/union'
+import { buffer } from '@turf/buffer'
+import { featureCollection, feature as turfFeature } from '@turf/helpers'
 
 const SWITZERLAND_CENTER: [number, number] = [8.2275, 46.8182]
 const INITIAL_ZOOM = 8
@@ -229,6 +232,16 @@ export default function MapView() {
         data: { type: 'FeatureCollection', features: [] },
       })
 
+      // White transparent backdrop — sits beneath the colored fill so parcels
+      // stay legible over busy aerial/cadastral basemaps.
+      map.addLayer({
+        id: 'portfolio-parcels-wash',
+        type: 'fill',
+        source: 'portfolio-parcels',
+        minzoom: 14,
+        paint: { 'fill-color': '#ffffff', 'fill-opacity': 0.35 },
+      }, 'parcel-highlight-fill')
+
       map.addLayer({
         id: 'portfolio-parcels-fill',
         type: 'fill',
@@ -247,6 +260,20 @@ export default function MapView() {
         paint: { 'line-color': statusColorAlphaExpr as any, 'line-width': 1.5, 'line-opacity': 0.55 },
       }, 'parcel-highlight-fill')
 
+      // White halo beneath the parcel-level pin for contrast, plus a slightly larger pin
+      map.addLayer({
+        id: 'portfolio-pins-halo',
+        type: 'circle',
+        source: 'portfolio-pins',
+        maxzoom: 14,
+        paint: {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 11, 14, 17] as any,
+          'circle-color': '#ffffff',
+          'circle-opacity': 0.4,
+        },
+      }, 'building-highlight-circle')
+
       // Parcel-level pin — visible at low zoom only (fades out when building pins take over)
       map.addLayer({
         id: 'portfolio-pins-circle',
@@ -255,7 +282,7 @@ export default function MapView() {
         maxzoom: 14,
         paint: {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 6, 14, 10] as any,
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 7, 14, 12] as any,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           'circle-color': statusColorSolidExpr as any,
           'circle-opacity': 1,
@@ -271,6 +298,21 @@ export default function MapView() {
         data: { type: 'FeatureCollection', features: [] },
         promoteId: 'egid',
       })
+
+      // White halo beneath each building-level pin for contrast
+      map.addLayer({
+        id: 'portfolio-building-pins-halo',
+        type: 'circle',
+        source: 'portfolio-building-pins',
+        minzoom: 14,
+        paint: {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 14, 9, 18, 15] as any,
+          'circle-color': '#ffffff',
+          'circle-opacity': 0.4,
+        },
+      }, 'building-highlight-circle')
+
       map.addLayer({
         id: 'portfolio-building-pins-circle',
         type: 'circle',
@@ -278,7 +320,7 @@ export default function MapView() {
         minzoom: 14,
         paint: {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          'circle-radius': ['interpolate', ['linear'], ['zoom'], 14, 5, 18, 9] as any,
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 14, 6, 18, 11] as any,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           'circle-color': statusColorSolidExpr as any,
           'circle-opacity': 1,
@@ -429,7 +471,7 @@ export default function MapView() {
 
       // ── Projects: diamond markers (zoomed out) + dashed construction perimeters (zoomed in) ──
       const makeDiamondIcon = (hex: string): ImageData => {
-        const size = 28
+        const size = 33
         const canvas = document.createElement('canvas')
         canvas.width = size
         canvas.height = size
@@ -446,14 +488,37 @@ export default function MapView() {
         ctx.stroke()
         return ctx.getImageData(0, 0, size, size)
       }
-      for (const [phase, cfg] of Object.entries(PHASE_CONFIG)) {
-        const imgId = `project-marker-${phase}`
+      for (const [status, cfg] of Object.entries(STATUS_CONFIG)) {
+        const imgId = `project-marker-${status}`
         if (!map.hasImage(imgId)) map.addImage(imgId, makeDiamondIcon(cfg.hex))
       }
 
-      const phaseColorExpr = [
-        'match', ['get', 'phase'],
-        ...Object.entries(PHASE_CONFIG).flatMap(([p, c]) => [p, c.hex]),
+      // Construction-site hatch: orange with white diagonal stripes, tileable.
+      const makeConstructionHatch = (): ImageData => {
+        const size = 64
+        const period = 16
+        const stripe = 7
+        const canvas = document.createElement('canvas')
+        canvas.width = size
+        canvas.height = size
+        const ctx = canvas.getContext('2d')!
+        ctx.fillStyle = '#FF7A00'
+        ctx.fillRect(0, 0, size, size)
+        // Diagonal white bars: pixels where (x + y) mod period < stripe — seamless
+        // because period divides the canvas size.
+        ctx.fillStyle = '#FFFFFF'
+        for (let x = 0; x < size; x++) {
+          for (let y = 0; y < size; y++) {
+            if ((x + y) % period < stripe) ctx.fillRect(x, y, 1, 1)
+          }
+        }
+        return ctx.getImageData(0, 0, size, size)
+      }
+      if (!map.hasImage('construction-hatch')) map.addImage('construction-hatch', makeConstructionHatch())
+
+      const statusColorExpr = [
+        'match', ['get', 'status'],
+        ...Object.entries(STATUS_CONFIG).flatMap(([s, c]) => [s, c.hex]),
         '#C0C0C0',
       ]
 
@@ -466,13 +531,21 @@ export default function MapView() {
         data: { type: 'FeatureCollection', features: [] },
       })
 
+      // White transparent backdrop beneath the hatched construction-site fill
+      map.addLayer({
+        id: 'project-areas-wash',
+        type: 'fill',
+        source: 'project-areas',
+        minzoom: 14,
+        paint: { 'fill-color': '#ffffff', 'fill-opacity': 0.3 },
+      }, 'parcel-highlight-fill')
+
       map.addLayer({
         id: 'project-areas-fill',
         type: 'fill',
         source: 'project-areas',
         minzoom: 14,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        paint: { 'fill-color': phaseColorExpr as any, 'fill-opacity': 0.10 },
+        paint: { 'fill-pattern': 'construction-hatch', 'fill-opacity': 0.55 },
       }, 'parcel-highlight-fill')
 
       map.addLayer({
@@ -482,12 +555,26 @@ export default function MapView() {
         minzoom: 14,
         paint: {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          'line-color': phaseColorExpr as any,
+          'line-color': statusColorExpr as any,
           'line-width': 2,
           'line-opacity': 0.85,
           'line-dasharray': [2, 1.5],
         },
       }, 'parcel-highlight-fill')
+
+      // White halo beneath the diamond markers for contrast
+      map.addLayer({
+        id: 'project-markers-halo',
+        type: 'circle',
+        source: 'project-markers',
+        maxzoom: 14,
+        paint: {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 15, 14, 21] as any,
+          'circle-color': '#ffffff',
+          'circle-opacity': 0.4,
+        },
+      }, 'building-highlight-circle')
 
       map.addLayer({
         id: 'project-markers-symbol',
@@ -496,7 +583,7 @@ export default function MapView() {
         maxzoom: 14,
         layout: {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          'icon-image': ['concat', 'project-marker-', ['get', 'phase']] as any,
+          'icon-image': ['concat', 'project-marker-', ['get', 'status']] as any,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           'icon-size': ['interpolate', ['linear'], ['zoom'], 8, 0.7, 14, 1] as any,
           'icon-allow-overlap': true,
@@ -521,33 +608,51 @@ export default function MapView() {
                 type: 'Feature' as const,
                 geometry: { type: 'Point' as const, coordinates: center },
                 properties: {
-                  id: p.id, name: p.name, phase: p.phase,
+                  id: p.id, name: p.name, status: p.status,
                   projectType: p.projectType, memberCount: p.members.length,
                 },
               }
             }),
           })
+          // Construction site per project: union of member parcels, buffered 1 m
+          // beyond the boundary. Falls back to raw per-member polygons if the
+          // boolean ops choke on cadastral slivers.
           areasSource.setData({
             type: 'FeatureCollection',
-            features: withMembers.flatMap(p => p.members.map(m => ({
-              type: 'Feature' as const,
-              geometry: m.parcel.geometry,
-              properties: {
-                id: p.id, name: p.name, phase: p.phase,
+            features: withMembers.flatMap(p => {
+              const props = {
+                id: p.id, name: p.name, status: p.status,
                 projectType: p.projectType, memberCount: p.members.length,
-              },
-            }))),
+              }
+              try {
+                const polys = p.members.map(m => turfFeature(m.parcel.geometry))
+                let merged: GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon> | null =
+                  polys.length === 1
+                    ? polys[0] as GeoJSON.Feature<GeoJSON.Polygon>
+                    : union(featureCollection(polys as GeoJSON.Feature<GeoJSON.Polygon>[]))
+                if (!merged) throw new Error('union failed')
+                const buffered = buffer(merged, 1, { units: 'meters' })
+                if (!buffered) throw new Error('buffer failed')
+                return [{ type: 'Feature' as const, geometry: buffered.geometry, properties: props }]
+              } catch {
+                return p.members.map(m => ({
+                  type: 'Feature' as const,
+                  geometry: m.parcel.geometry,
+                  properties: props,
+                }))
+              }
+            }),
           })
         } catch { /* map may be destroyed during HMR */ }
       }
 
       const projectTooltipHtml = (props: Record<string, unknown>) => {
-        const phaseLabel = PHASE_CONFIG[props.phase as keyof typeof PHASE_CONFIG]?.label ?? props.phase
+        const statusLabel = STATUS_CONFIG[props.status as keyof typeof STATUS_CONFIG]?.label ?? props.status
         const typeLabel = TYPE_LABELS[props.projectType as keyof typeof TYPE_LABELS] ?? props.projectType
         const n = props.memberCount as number
         return `<div style="font-weight:600;margin-bottom:3px">${props.name}</div>`
           + `<div style="color:rgba(255,255,255,0.4);font-size:9px;letter-spacing:0.06em;text-transform:uppercase">`
-          + `${phaseLabel} · ${typeLabel} · ${n} parcel${n !== 1 ? 's' : ''}</div>`
+          + `${statusLabel} · ${typeLabel} · ${n} parcel${n !== 1 ? 's' : ''}</div>`
       }
 
       for (const layerId of ['project-markers-symbol', 'project-areas-fill'] as const) {
@@ -701,8 +806,11 @@ export default function MapView() {
       useMapStore.getState().setPortfolioPinsFn(null)
       useMapStore.getState().setProjectsMapFn(null)
       ;((map as unknown as Record<string, unknown>)._portfolioPopupStyle as HTMLStyleElement | undefined)?.remove()
-      for (const id of ['portfolio-building-pins-circle', 'portfolio-pins-circle', 'portfolio-parcels-fill', 'portfolio-parcels-outline',
-                        'project-markers-symbol', 'project-areas-fill', 'project-areas-outline']) {
+      for (const id of ['portfolio-building-pins-halo', 'portfolio-building-pins-circle',
+                        'portfolio-pins-halo', 'portfolio-pins-circle',
+                        'portfolio-parcels-wash', 'portfolio-parcels-fill', 'portfolio-parcels-outline',
+                        'project-markers-halo', 'project-markers-symbol',
+                        'project-areas-wash', 'project-areas-fill', 'project-areas-outline']) {
         if (map.getLayer(id)) map.removeLayer(id)
       }
       for (const id of ['portfolio-building-pins', 'portfolio-pins', 'portfolio-parcels', 'project-markers', 'project-areas']) {
