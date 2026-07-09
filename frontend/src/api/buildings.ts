@@ -52,8 +52,10 @@ export type BuildingMeasurementsResponse = {
 
 export async function fetchBuildingMeasurements(
   egid: number,
+  bbox?: [number, number, number, number],
 ): Promise<BuildingMeasurementsResponse | null> {
-  const res = await fetch(`/api/buildings/${egid}/measurements`)
+  const qs = bbox ? `?${new URLSearchParams({ bbox: bbox.join(',') })}` : ''
+  const res = await fetch(`/api/buildings/${egid}/measurements${qs}`)
   if (res.status === 404) return null
   if (!res.ok) throw new Error(`${res.status}`)
   return res.json()

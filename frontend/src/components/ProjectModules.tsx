@@ -1325,6 +1325,17 @@ export default function ProjectModules({ project }: { project: Project }) {
     [project.members],
   )
 
+  // Union bbox of every member's parcel — narrows the backend's tile search.
+  const projectBbox = useMemo((): [number, number, number, number] | undefined => {
+    const coords = project.members.flatMap(m =>
+      (m.parcel.geometry.coordinates as [number, number][][]).flat(),
+    )
+    if (coords.length === 0) return undefined
+    const lngs = coords.map(c => c[0])
+    const lats = coords.map(c => c[1])
+    return [Math.min(...lngs), Math.min(...lats), Math.max(...lngs), Math.max(...lats)]
+  }, [project.members])
+
   // Measurements: viewer-computed (store) take precedence, API-fetched as fallback
   const [fetched, setFetched] = useState<Record<number, BuildingMeasurements> | null>(null)
   useEffect(() => {
@@ -1332,7 +1343,7 @@ export default function ProjectModules({ project }: { project: Project }) {
     const egids = allBuildings.map(b => Number(b.egid)).filter(id => id > 0)
     if (egids.length === 0) { setFetched(null); return }
     Promise.all(egids.map(egid =>
-      fetchBuildingMeasurements(egid).then(m => [egid, m] as const).catch(() => [egid, null] as const),
+      fetchBuildingMeasurements(egid, projectBbox).then(m => [egid, m] as const).catch(() => [egid, null] as const),
     )).then(results => {
       if (cancelled) return
       const rec: Record<number, BuildingMeasurements> = {}
@@ -1340,7 +1351,7 @@ export default function ProjectModules({ project }: { project: Project }) {
       setFetched(Object.keys(rec).length > 0 ? rec : null)
     })
     return () => { cancelled = true }
-  }, [allBuildings])
+  }, [allBuildings, projectBbox])
 
   const measurements = useMemo(() => {
     if (!fetched && !buildingMeasurements) return null
