@@ -125,6 +125,7 @@ export default function Sidebar() {
     lookupParcel,
     selectedParcel, selectedGWR,
     clearHighlight, clearParcel,
+    analysisMode, projectMode,
     setParcelResult, parcelHighlightFn,
     portfolio, portfolioHighlightFn,
     sidebarResizing, setSidebarResizing,
@@ -261,7 +262,9 @@ export default function Sidebar() {
       setSidebarCollapsed(false)
       setSidebarWidth(DATA_W)
       setPortfolioMode(true)
-      clearParcel()
+      // Don't wipe the parcel behind an open Analysis/Project view — that
+      // view stays open until the user explicitly confirms exiting it.
+      if (!analysisMode && !projectMode) clearParcel()
       mapInstance?.easeTo({ padding: { ...PAD_NONE, left: DATA_W + SEPARATOR_W }, duration: 300 })
       if (portfolio.length > 0 && portfolioHighlightFn) {
         portfolioHighlightFn(portfolio.map(e => e.parcel.geometry))
@@ -285,7 +288,8 @@ export default function Sidebar() {
       setSidebarCollapsed(false)
       setSidebarWidth(DATA_W)
       setProjectsMode(true)
-      clearParcel()
+      // Don't wipe the parcel behind an open Analysis view.
+      if (!analysisMode) clearParcel()
       mapInstance?.easeTo({ padding: { ...PAD_NONE, left: DATA_W + SEPARATOR_W }, duration: 300 })
       const geoms = projects.flatMap(p => p.members.map(m => m.parcel.geometry))
       if (geoms.length > 0 && portfolioHighlightFn) {
