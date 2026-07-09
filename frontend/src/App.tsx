@@ -4,14 +4,16 @@ import Sidebar from './components/Sidebar'
 import LayerSwitcher from './components/LayerSwitcher'
 import ParcelPanel from './components/ParcelPanel'
 import AnalysisPanel from './components/AnalysisPanel'
+import ProjectPanel from './components/ProjectPanel'
 import HelpPanel from './components/HelpPanel'
 import { useMapStore, loadPortfolioFromStorage, clearPortfolioStorage } from './store/mapStore'
+import { normalizeProject } from './utils/projectNormalize'
 import { fetchDownloadedTiles } from './api/tiles'
 import { useAutoTileDownload } from './hooks/useAutoTileDownload'
 import { usePreloadBuildings } from './hooks/usePreloadBuildings'
 
 export default function App() {
-  const { analysisMode, helpMode, setDownloadedTileIds, setPortfolio, setProjects } = useMapStore()
+  const { analysisMode, projectMode, helpMode, setDownloadedTileIds, setPortfolio, setProjects } = useMapStore()
   const autoTileStatus = useAutoTileDownload()
   usePreloadBuildings(autoTileStatus)
 
@@ -52,7 +54,7 @@ export default function App() {
   useEffect(() => {
     fetch('/api/projects')
       .then((r) => r.json())
-      .then(setProjects)
+      .then((list: unknown[]) => setProjects(list.map(normalizeProject)))
       .catch(() => {})
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
   return (
@@ -62,8 +64,9 @@ export default function App() {
       </div>
       <Sidebar />
       <LayerSwitcher />
-      {!analysisMode && <ParcelPanel autoTileStatus={autoTileStatus} />}
+      {!analysisMode && !projectMode && <ParcelPanel autoTileStatus={autoTileStatus} />}
       {analysisMode && <AnalysisPanel autoTileStatus={autoTileStatus} />}
+      {projectMode && <ProjectPanel />}
       {helpMode && <HelpPanel />}
     </div>
   )

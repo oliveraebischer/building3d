@@ -28,17 +28,33 @@ def _save(user_id: str, d: dict) -> None:
 class ProjectPatch(BaseModel):
     name: Optional[str] = None
     projectType: Optional[str] = None
-    phase: Optional[str] = None
+    status: Optional[str] = None
     notes: Optional[str] = None
     milestones: Optional[list] = None
     members: Optional[list] = None
     scenarios: Optional[list] = None
+    activeScenarioId: Optional[str] = None
+    siaTimeline: Optional[dict] = None
+    energyPlan: Optional[dict] = None
+
+
+PATCH_FIELDS = (
+    "name", "projectType", "status", "notes", "milestones",
+    "members", "scenarios", "activeScenarioId", "siaTimeline", "energyPlan",
+)
+
+
+def _normalize(project: dict) -> dict:
+    # Legacy records stored the project status under "phase".
+    if "status" not in project and "phase" in project:
+        project["status"] = project.pop("phase")
+    return project
 
 
 @router.get("")
 async def list_projects(user: dict = Depends(get_current_user)):
     d = _load(user["id"])
-    return list(d.values())
+    return [_normalize(p) for p in d.values()]
 
 
 @router.post("", status_code=201)
@@ -58,11 +74,11 @@ async def update_project(project_id: str, patch: ProjectPatch, user: dict = Depe
     d = _load(user["id"])
     if project_id not in d:
         raise HTTPException(404, f"Project {project_id} not found")
-    project = d[project_id]
-    for field in ("name", "projectType", "phase", "notes", "milestones", "members", "scenarios"):
-        value = getattr(patch, field)
-        if value is not None:
-            project[field] = value
+    project = _normalize(d[project_id])
+    # model_fields_set (not "is not None") so activeScenarioId can be cleared to null.
+    for field in PATCH_FIELDS:
+        if field in patch.model_fields_set:
+            project[field] = getattr(patch, field)
     project["updatedAt"] = datetime.now(timezone.utc).isoformat()
     _save(user["id"], d)
     return project

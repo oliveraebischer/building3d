@@ -131,7 +131,7 @@ export default function Sidebar() {
     portfolioPinClickedEgrid,
     helpMode, setHelpMode,
     helpPanelWidth,
-    projects, setActiveProjectId,
+    projects, setActiveProjectId, setProjectMode,
     projectMarkerClickedId, setProjectMarkerClickedId,
     promoteToProjectEgrids,
   } = useMapStore()
@@ -366,11 +366,11 @@ export default function Sidebar() {
     handlePortfolioClick()
   }, [portfolioPinClickedEgrid]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Open projects mode when a project marker/area is clicked ──────────────
+  // ── Open the full-screen project view when a marker/area is clicked ───────
   useEffect(() => {
     if (!projectMarkerClickedId) return
     setActiveProjectId(projectMarkerClickedId)
-    if (!projectsModeRef.current) handleProjectsClick()
+    setProjectMode(true)
     setProjectMarkerClickedId(null)
   }, [projectMarkerClickedId]) // eslint-disable-line react-hooks/exhaustive-deps
 
